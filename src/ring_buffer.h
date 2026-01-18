@@ -1,3 +1,79 @@
+#if 1
+
+struct AudioRingBuffer
+{
+  SamplePair *samples;
+  u64 sampleCount;
+  u64 writeIndex;
+  u64 readIndex;
+};
+
+static inline AudioRingBuffer*
+rbAlloc(Arena *arena, u64 sampleCount)
+{
+  AudioRingBuffer *result = arenaPushStruct(arena, AudioRingBuffer);
+  result->sampleCount = ROUND_UP_POW_2(sampleCount);
+  result->samples = arenaPushArray(arena, result->sampleCount, SamplePair);
+  result->writeIndex = 0;
+  result->readIndex = 0;
+  return(result);
+}
+
+static inline u64
+rbAvailableReadSampleCount(AudioRingBuffer *rb)
+{
+  u64 result = rb->writeIndex - rb->readIndex;
+  return(result);
+}
+
+static inline void
+rbReadFromBuffer(AudioRingBuffer *rb, SamplePair *dest, u64 sampleCount)
+{
+  u64 readIndexWrapped = (rb->readIndex & (rb->sampleCount - 1));
+  u64 samplesToBufferEnd = rb->sampleCount - readIndexWrapped;
+  u64 samplesToRead = MIN(sampleCount, samplesToBufferEnd);
+  COPY_ARRAY(dest, rb->samples + readIndexWrapped, samplesToRead, SamplePair);
+  if(samplesToRead < sampleCount)
+  {
+    u64 samplesRemaining = sampleCount - samplesToBufferEnd;
+    COPY_ARRAY(dest + samplesToBufferEnd, rb->samples, samplesRemaining, SamplePair);
+  }
+  rb->readIndex += sampleCount;
+}
+
+static inline void
+rbWriteToBuffer(AudioRingBuffer *rb, SamplePair *src, u64 sampleCount)
+{
+  u64 writeIndexWrapped = (rb->writeIndex & (rb->sampleCount - 1));
+  u64 samplesToBufferEnd = rb->sampleCount - writeIndexWrapped;
+  u64 samplesToWrite = MIN(sampleCount, samplesToBufferEnd);
+  COPY_ARRAY(rb->samples + writeIndexWrapped, src, samplesToWrite, SamplePair);
+  if(samplesToWrite < sampleCount)
+  {
+    u64 samplesRemaining = sampleCount - samplesToBufferEnd;
+    COPY_ARRAY(rb->samples, src + samplesToBufferEnd, samplesRemaining, SamplePair);
+  }
+  rb->writeIndex += sampleCount;
+}
+
+static inline void
+rbClearSamples(AudioRingBuffer *rb, u64 startIndex, u64 endIndex)
+{
+  ASSERT(startIndex < endIndex);
+  ASSERT(endIndex <= rb->readIndex);
+  u64 sampleCount = endIndex - startIndex;
+  u64 startIndexWrapped = startIndex & (rb->sampleCount - 1);
+  u64 samplesToBufferEnd = rb->sampleCount - startIndexWrapped;
+  u64 samplesToClear = MIN(sampleCount, samplesToBufferEnd);
+  ZERO_ARRAY(rb->samples + startIndexWrapped, samplesToClear, SamplePair);
+  if(samplesToClear < sampleCount)
+  {
+    u64 samplesRemaining = sampleCount - samplesToClear;
+    ZERO_ARRAY(rb->samples, samplesRemaining, SamplePair);
+  }
+}
+
+#else
 struct AudioRingBuffer
 {
   r32 *samples[2];
@@ -16,16 +92,6 @@ getAudioRingBufferOffset(AudioRingBuffer *rb)
 
   return(offset);
 }
-
-struct SharedRingBuffer
-{
-  u8 *entries;
-  u32 capacity;
-
-  u32 writeIndex;
-  u32 readIndex;
-  volatile u32 queuedCount;
-};
 
 inline void
 writeSamplesToAudioRingBuffer(AudioRingBuffer *rb, r32 *srcL, r32 *srcR, u32 count, bool increment = true)
@@ -68,6 +134,17 @@ readSamplesFromAudioRingBuffer(AudioRingBuffer *rb, r32 *destL, r32 *destR, u32 
       rb->readIndex = (rb->readIndex + count) % rb->capacity;
     }
 }
+#endif
+
+struct SharedRingBuffer
+{
+  u8 *entries;
+  u32 capacity;
+
+  u32 writeIndex;
+  u32 readIndex;
+  volatile u32 queuedCount;
+};
 
 inline void
 queueSharedRingBufferEntry_(SharedRingBuffer *rb, void *entry, usz entrySize)

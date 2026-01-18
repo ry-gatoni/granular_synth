@@ -361,6 +361,9 @@ struct PluginState
   InputMixStream inputStream;
   BufferStream inputStreamClone;
 
+  GrainManager grainManager;
+  GrainStateView grainStateView;
+
   LoadedGrainPackfile loadedGrainPackfile;
   FileGrainState silo;
 
@@ -387,17 +390,11 @@ struct PluginState
   PluginAsset *grainViewOutline;
 
   LoadedFont *agencyBold;
-  /* PluginAssets assets; */
 
-  //UILayout layout;
   UIContext uiContext;
   UIPanel *rootPanel;
   UIPanel *menuPanel;
   UILayout *mouseTooltipLayout;
-
-  GrainManager grainManager;
-  //AudioRingBuffer grainBuffer;
-  GrainStateView grainStateView;
 
   volatile u32 initializationLock;
   bool initialized;

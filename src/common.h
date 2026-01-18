@@ -192,12 +192,6 @@ enum AudioFormat
   AudioFormat_r32,
 };
 
-union SamplePair
-{
-  struct { r32 left, right; };
-  r32 c[2];
-};
-
 struct MidiHeader
 {
   u8 messageLength;

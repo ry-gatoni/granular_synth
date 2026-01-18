@@ -1639,6 +1639,124 @@ gsRenderNewFrame(PluginMemory *memory, PluginInput *input, RenderCommands *rende
 // audio
 //
 
+/* STREAM TOPOLOGY
+ *
+ * input     stream +
+ *                  |\
+ * pv input  stream + |
+ *                  | |
+ * pv output stream + |
+ *                  | |
+ * grain     stream + |
+ *                  |/
+ * output    stream +
+ *
+ */
+
+struct PVStream
+{
+  BufferStream stream; // NOTE: must be the first member for casting reasons
+  BufferStream *source;
+  Arena *refillArena;
+  u64 windowSampleCount;
+};
+
+// TODO: is using `SamplePair` actually better if we end up needing to vectorize each channel?
+
+static void
+pvProcess(BufferStream *stream)
+{
+  PVStream *pvStream = (PVStream*)stream;
+  Arena *refillArena = pvStream->refillArena;
+  u64 windowSampleCount = pvStream->windowSampleCount;
+  BufferStream *inStream = pvStream->source;
+  if(inStream->at == inStream->end) inStream->refill(inStream);
+  ASSERT(inStream->at == inStream->start);
+
+  SamplePair *inputSamples = (SamplePair*)inStream->at;
+  inStream->at += analysisHopSize*sizeof(*inputSamples);
+
+  // TODO: window frame
+  r32 *fftInSamplesL = arenaPushArray(refillArena, 2*windowSampleCount, r32);
+  r32 *fftInSamplesR = fftInSamplesL + windowSampleCount;
+  // TODO: vectorize
+  for(u32 i = 0; i < windowSampleCount; ++i)
+  {
+    fftInSamplesL[i] = inputSamples[i].left;
+    fftInSamplesR[i] = inputSamples[i].right;
+  }
+  FloatBuffer fftInL = makeFloatBuffer(fftInSamplesL, windowSampleCount);
+  FloatBuffer fftInR = makeFloatBuffer(fftInSamplesR, windowSampleCount);
+
+  ComplexBuffer inputSpectrumL = fft(refillArena, fftInL);
+  ComplexBuffer inputSpectrumR = fft(refillArena, fftInR);
+  // TODO: phase vocoder shenanigans
+  FloatBuffer ifftOutputL = ifft(refillArena, inputSpectrumL);
+  FloatBuffer ifftOutputR = ifft(refillArena, inputSpectrumR);
+
+  SamplePair *outputSamples = arenaPushArray(refillArena, windowSampleCount, SamplePair);
+  // TODO: vectorize
+  for(u32 i = 0; i < windowSampleCount; ++i)
+  {
+    outputSamples[i].left  = ifftOutputL.vals[i];
+    outputSamples[i].right = ifftOutputR.vals[i];
+  }
+
+  stream->at = (u8*)outputSamples;
+  stream->start = stream->at;
+  stream->end = (u8*)(inputSamples + pvStream->windowSampleCount);
+}
+
+struct PVOutputStream
+{
+  BufferStream stream; // NOTE: must be the first member for casting reasons
+  BufferStream *source;
+  Arena *refillArena;
+  AudioRingBuffer *internalRingBuffer;
+};
+
+static void
+pvOutput(BufferStream *stream)
+{
+  ASSERT(stream->at == stream->end);
+  PVOutputStream *pvStream = (PVOutputStream*)stream;
+  Arena *refillArena = pvStream->refillArena;
+  AudioRingBuffer *rb = pvStream->internalRingBuffer;
+  BufferStream *pvSource = pvStream->source;
+  if(pvSource->at == pvSource->end) pvSource->refill(pvSource);
+  ASSERT(pvSource->at == pvSource->start);
+
+  // NOTE: add new frame to internal buffer and update buffer write index
+  {
+    SamplePair *pvFrameSamples = (SamplePair*)pvSource->at;
+    SamplePair *pvFrameSamplesEnd = (SamplePair*)pvSource->end;
+    u64 samplesToProcess = INT_FROM_PTR(pvFrameSamplesEnd - pvFrameSamples);
+    for(u64 i = 0; i < samplesToProcess; ++i)
+    {
+      u32 writeIndex = (i + rb->writeIndex) & (rb->sampleCount - 1);
+      rb->samples[writeIndex].left  += pvFrameSamples[i].left;
+      rb->samples[writeIndex].right += pvFrameSamples[i].right;
+    }
+    rb->writeIndex += synthesizeHopSize;
+    //rb->writeIndex &= rb->sampleCount - 1;
+    pvSource->at += samplesToProcess*sizeof(*pvFrameSamples);
+  }
+
+  // NOTE: read from internal buffer, update read index, and clear read region
+  {
+    u64 availableSamples = rbAvailableReadSampleCount(rb);
+    SamplePair *outputSamples = arenaPushArray(refillArena, availableSamples, SamplePair);
+    u64 oldReadIndex = rb->readIndex;
+    rbReadFromBuffer(rb, outputSamples, availableSamples);
+    u64 newReadIndex = rb->readIndex;
+    rbClearSamples(rb, oldReadIndex, newReadIndex);
+
+    stream->start = (u8*)outputSamples;
+    stream->at = stream->start;
+    stream->end = (u8*)(outputSamples + availableSamples);
+  }
+}
+
 static void
 mixOutputSamples(BufferStream *stream)
 {

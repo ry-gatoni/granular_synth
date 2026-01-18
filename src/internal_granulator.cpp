@@ -34,23 +34,23 @@ initializeWindows(GrainManager* grainManager)
   }
 }
 
-static AudioRingBuffer
-initializeGrainBuffer(PluginState *pluginState, u32 bufferCount)
-{
-  AudioRingBuffer grainBuffer = {};
-  grainBuffer.capacity = bufferCount;
-  grainBuffer.samples[0] = arenaPushArray(pluginState->permanentArena, bufferCount, r32,
-                                          arenaFlagsNoZeroAlign(4*sizeof(r32)));
-  grainBuffer.samples[1] = arenaPushArray(pluginState->permanentArena, bufferCount, r32,
-                                          arenaFlagsNoZeroAlign(4*sizeof(r32)));
+// static AudioRingBuffer
+// initializeGrainBuffer(PluginState *pluginState, u32 bufferCount)
+// {
+//   AudioRingBuffer grainBuffer = {};
+//   grainBuffer.capacity = bufferCount;
+//   grainBuffer.samples[0] = arenaPushArray(pluginState->permanentArena, bufferCount, r32,
+//                                           arenaFlagsNoZeroAlign(4*sizeof(r32)));
+//   grainBuffer.samples[1] = arenaPushArray(pluginState->permanentArena, bufferCount, r32,
+//                                           arenaFlagsNoZeroAlign(4*sizeof(r32)));
 
-  r32 offset = pluginReadFloatParameter(&pluginState->parameters[PluginParameter_offset]);
-  u32 offsetSamples = (u32)offset;
-  grainBuffer.writeIndex = offsetSamples;
-  grainBuffer.readIndex = 0;
+//   r32 offset = pluginReadFloatParameter(&pluginState->parameters[PluginParameter_offset]);
+//   u32 offsetSamples = (u32)offset;
+//   grainBuffer.writeIndex = offsetSamples;
+//   grainBuffer.readIndex = 0;
 
-  return(grainBuffer);
-}
+//   return(grainBuffer);
+// }
 
 static void
 makeNewGrain(GrainManager* grainManager, u32 grainSize, r32 windowParam, r32 spread, u32 sampleIndex)

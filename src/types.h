@@ -267,3 +267,15 @@ struct LoadedFont
   /* LoadedBitmap *glyphs; */
   /* r32 *horizontalAdvance;   */
 };
+
+union SamplePair
+{
+  struct { r32 left, right; };
+  r32 c[2];
+};
+
+union ComplexPair
+{
+  struct { c64 left, right; };
+  c64 c[2];
+};

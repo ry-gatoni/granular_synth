@@ -10,8 +10,64 @@
 
 #define FFT_FUNCTION(name) ComplexBuffer (name)(Arena *arena, FloatBuffer input)
 #define IFFT_FUNCTION(name) FloatBuffer (name)(Arena *arena, ComplexBuffer input)
+// #define FFT_FUNCTION(name) void (name)(ComplexBuffer *output, FloatBuffer input)
+// #define IFFT_FUNCTION(name) void (name)(FloatBuffer *output, ComplexBuffer input)
 typedef FFT_FUNCTION(FFT_Function);
 typedef IFFT_FUNCTION(IFFT_Function);
+
+static FFT_Function *fft = 0;
+static IFFT_Function *ifft = 0;
+
+// static ComplexPair*
+// fft(Arena *arena, SamplePair *samples, u64 sampleCount)
+// {
+//   TemporaryMemory scratch = arenaGetScratch(&arena, 1);
+//   r32 *srcSamplesL = arenaPushArray(scratch.arena, 2*sampleCount, r32);
+//   r32 *srcSamplesR = srcSamplesL + sampleCount;
+//   // TODO: vectorize
+//   for(u32 i = 0; i < sampleCount; ++i)
+//   {
+//     srcSamplesL[i] = samples[i].left;
+//     srcSamplesR[i] = samples[i].right;
+//   }
+//   FloatBuffer srcL = makeFloatBuffer(srcSamplesL, sampleCount);
+//   FloatBuffer srcR = makeFloatBuffer(srcSamplesR, sampleCount);
+
+//   c64 *destBinsL = arenaPushArray(scratch.arena, 2*sampleCount, c64);
+//   c64 *destBinsR = destBinsL + sampleCount;
+//   ComplexBuffer destL = makeComplexBuffer(destBinsL, sampleCount);
+//   ComplexBuffer destR = makeComplexBuffer(destBinsR, sampleCount);
+//   fft_core(&destL, srcL);
+//   fft_core(&destR, srcR);
+
+//   ComplexPair *result = arenaPushArray(arena, sampleCount, ComplexPair);
+//   // TODO: vectorize
+//   for(u32 i = 0; i < sampleCount; ++i)
+//   {
+//     result[i].left  = destL.vals[i];
+//     result[i].right = destR.vals[i];
+//   }
+
+//   arenaReleaseScratch(scratch);
+//   return(result);
+// }
+
+// static SamplePair*
+// ifft(Arena *arena, ComplexPair *spectrum, u64 binCount)
+// {
+//   SamplePair *result = arenaPushArray(arena, binCount, SamplePair);
+//   c64 *srcBinsL = &spectrum->left;
+//   c64 *srcBinsR = &spectrum->right;
+//   ComplexBuffer srcL = makeComplexBuffer(srcBinsL, binCount, sizeof(*spectrum));
+//   ComplexBuffer srcR = makeComplexBuffer(srcBinsR, binCount, sizeof(*spectrum));
+//   r32 *destSamplesL = &result->left;
+//   r32 *destSamplesR = &result->right;
+//   FloatBuffer destL = makeFloatBuffer(destSamplesL, binCount, sizeof(*result));
+//   FloatBuffer destR = makeFloatBuffer(destSamplesR, binCount, sizeof(*result));
+//   ifft_core(&destL, srcL);
+//   ifft_core(&destR, srcR);
+//   return(result);
+// }
 
 static FFT_FUNCTION(fft_dit_radix2_scalar)
 {
@@ -20,69 +76,71 @@ static FFT_FUNCTION(fft_dit_radix2_scalar)
   usz count = ROUND_UP_POW_2(input.count);
   r32 *reVals = arenaPushArray(arena, count, r32);
   r32 *imVals = arenaPushArray(arena, count, r32);
+  // c64 *vals = arenaPushArray(arena, count, c64);
 
   // NOTE: input permutation
   {
     PROFILE_BLOCK("fft_dit_radix2_scalar:input_permutation");
-    
+
     usz countLog2 = LOG2(count);
     r32 *src = input.vals;
     for(u32 i = 0; i < count; ++i)
       {
-	u32 iRev = reverseBits(i) >> (sizeof(u32)*8 - countLog2);
-	reVals[iRev] = src[i];
+        u32 iRev = reverseBits(i) >> (sizeof(u32)*8 - countLog2);
+        reVals[iRev] = src[i];
+        // vals[iRev].re = src[i];
       }
   }
-  
+
   // NOTE: twiddles
   {
     PROFILE_BLOCK("fft_dit_radix2_scalar:twiddles");
-    
+
     for(u32 m = 2; m <= count; m <<= 1)
       {
-	r32 theta = -2.f * GS_PI / (r32)m;
-	r32 wmRe = gsCos(theta);
-	r32 wmIm = gsSin(theta);
-	
-	for(u32 k = 0; k < count; k += m)
-	  {
-	    r32 wRe = 1.f;
-	    r32 wIm = 0.f;
-	    r32 *at0Re = reVals + k;
-	    r32 *at0Im = imVals + k;
-	    r32 *at1Re = reVals + k + m/2;
-	    r32 *at1Im = imVals + k + m/2;
-	    for(u32 j = 0; j < m/2; ++j)
-	      {
-		PROFILE_BLOCK("fft_dit_radix2_scalar:kernel");
+        r32 theta = -2.f * GS_PI / (r32)m;
+        r32 wmRe = gsCos(theta);
+        r32 wmIm = gsSin(theta);
 
-		r32 in0Re = *at0Re;
-		r32 in0Im = *at0Im;
-		r32 in1Re = *at1Re;
-		r32 in1Im = *at1Im;
+        for(u32 k = 0; k < count; k += m)
+          {
+            r32 wRe = 1.f;
+            r32 wIm = 0.f;
+            r32 *at0Re = reVals + k;
+            r32 *at0Im = imVals + k;
+            r32 *at1Re = reVals + k + m/2;
+            r32 *at1Im = imVals + k + m/2;
+            for(u32 j = 0; j < m/2; ++j)
+              {
+                PROFILE_BLOCK("fft_dit_radix2_scalar:kernel");
 
-		r32 tRe = wRe*in1Re - wIm*in1Im;
-		r32 tIm = wRe*in1Im + wIm*in1Re;
+                r32 in0Re = *at0Re;
+                r32 in0Im = *at0Im;
+                r32 in1Re = *at1Re;
+                r32 in1Im = *at1Im;
 
-		r32 out0Re = in0Re + tRe;
-		r32 out0Im = in0Im + tIm;
-		r32 out1Re = in0Re - tRe;
-		r32 out1Im = in0Im - tIm;
+                r32 tRe = wRe*in1Re - wIm*in1Im;
+                r32 tIm = wRe*in1Im + wIm*in1Re;
 
-		*at0Re++ = out0Re;
-		*at0Im++ = out0Im;
-		*at1Re++ = out1Re;
-		*at1Im++ = out1Im;
+                r32 out0Re = in0Re + tRe;
+                r32 out0Im = in0Im + tIm;
+                r32 out1Re = in0Re - tRe;
+                r32 out1Im = in0Im - tIm;
 
-		r32 wOldRe = wRe;
-		r32 wOldIm = wIm;
-		wRe = wOldRe*wmRe - wOldIm*wmIm;
-		wIm = wOldRe*wmIm + wOldIm*wmRe;
-	      }
-	  }
+                *at0Re++ = out0Re;
+                *at0Im++ = out0Im;
+                *at1Re++ = out1Re;
+                *at1Im++ = out1Im;
+
+                r32 wOldRe = wRe;
+                r32 wOldIm = wIm;
+                wRe = wOldRe*wmRe - wOldIm*wmIm;
+                wIm = wOldRe*wmIm + wOldIm*wmRe;
+              }
+          }
       }
   }
-  
+
   ComplexBuffer result = {};
   result.count = count;
   result.reVals = reVals;
@@ -104,87 +162,87 @@ static FFT_FUNCTION(fft_dit_radix2_simd)
   // TODO: simd-ize
   {
     PROFILE_BLOCK("fft_dit_radix2_simd:input_permutation");
-    
+
     usz countLog2 = LOG2(count);
     r32 *src = input.vals;
     for(u32 i = 0; i < count; ++i)
       {
-	u32 iRev = reverseBits(i) >> (sizeof(u32)*8 - countLog2);
-	reVals[iRev] = src[i];
+        u32 iRev = reverseBits(i) >> (sizeof(u32)*8 - countLog2);
+        reVals[iRev] = src[i];
       }
   }
-  
+
   // NOTE: twiddles
   {
     PROFILE_BLOCK("fft_dit_radix2_simd:twiddles");
-    
+
     for(u32 m = 2; m <= count; m <<= 1)
       {
-	r32 theta = -2.f * GS_PI / (r32)m;
-	c64 wm = C64Polar(1.f, theta);
-	c64 wmSq = wm*wm;
-	c64 wmCu = wmSq*wm;
-	c64 wmQu = wmCu*wm;	
-	WideFloat wmQuRe = wideSetConstantFloats(wmQu.re);
-	WideFloat wmQuIm = wideSetConstantFloats(wmQu.im);
-	
-	for(u32 k = 0; k < count; k += m)
-	  {
-	    WideFloat wRe = wideSetFloats(1.f, wm.re, wmSq.re, wmCu.re);
-	    WideFloat wIm = wideSetFloats(0.f, wm.im, wmSq.im, wmCu.im);
+        r32 theta = -2.f * GS_PI / (r32)m;
+        c64 wm = C64Polar(1.f, theta);
+        c64 wmSq = wm*wm;
+        c64 wmCu = wmSq*wm;
+        c64 wmQu = wmCu*wm;
+        WideFloat wmQuRe = wideSetConstantFloats(wmQu.re);
+        WideFloat wmQuIm = wideSetConstantFloats(wmQu.im);
 
-	    r32 *at0Re = reVals + k;
-	    r32 *at0Im = imVals + k;
-	    r32 *at1Re = reVals + k + m/2;
-	    r32 *at1Im = imVals + k + m/2;
-	    for(u32 j = 0; j < m/2; j += simdWidth)
-	      {
-		PROFILE_BLOCK("fft_dit_radix2_simd:kernel");
-		
-		WideInt storeMask = wideSetConstantInts(0);
-		for(u32 lane = 0; lane < simdWidth; ++lane)
-		  {
-		    u32 val = (j + lane < m/2) ? 0xFFFFFFFF : 0;
-		    wideSetLaneInts(&storeMask, val, lane);
-		  }
+        for(u32 k = 0; k < count; k += m)
+          {
+            WideFloat wRe = wideSetFloats(1.f, wm.re, wmSq.re, wmCu.re);
+            WideFloat wIm = wideSetFloats(0.f, wm.im, wmSq.im, wmCu.im);
 
-		WideFloat in0Re = wideLoadFloats(at0Re);
-		WideFloat in0Im = wideLoadFloats(at0Im);
-		WideFloat in1Re = wideLoadFloats(at1Re);
-		WideFloat in1Im = wideLoadFloats(at1Im);
+            r32 *at0Re = reVals + k;
+            r32 *at0Im = imVals + k;
+            r32 *at1Re = reVals + k + m/2;
+            r32 *at1Im = imVals + k + m/2;
+            for(u32 j = 0; j < m/2; j += simdWidth)
+              {
+                PROFILE_BLOCK("fft_dit_radix2_simd:kernel");
 
-		WideFloat tRe = wRe*in1Re - wIm*in1Im;
-		WideFloat tIm = wRe*in1Im + wIm*in1Re;
+                WideInt storeMask = wideSetConstantInts(0);
+                for(u32 lane = 0; lane < simdWidth; ++lane)
+                  {
+                    u32 val = (j + lane < m/2) ? 0xFFFFFFFF : 0;
+                    wideSetLaneInts(&storeMask, val, lane);
+                  }
 
-		WideFloat out0Re = in0Re + tRe;
-		WideFloat out0Im = in0Im + tIm;
-		WideFloat out1Re = in0Re - tRe;
-		WideFloat out1Im = in0Im - tIm;
+                WideFloat in0Re = wideLoadFloats(at0Re);
+                WideFloat in0Im = wideLoadFloats(at0Im);
+                WideFloat in1Re = wideLoadFloats(at1Re);
+                WideFloat in1Im = wideLoadFloats(at1Im);
 
-		WideFloat store0Re = wideMaskFloats(out0Re, in0Re, storeMask);
-		WideFloat store0Im = wideMaskFloats(out0Im, in0Im, storeMask);
-		WideFloat store1Re = wideMaskFloats(out1Re, in1Re, storeMask);
-		WideFloat store1Im = wideMaskFloats(out1Im, in1Im, storeMask);
+                WideFloat tRe = wRe*in1Re - wIm*in1Im;
+                WideFloat tIm = wRe*in1Im + wIm*in1Re;
 
-		wideStoreFloats(at0Re, store0Re);
-		wideStoreFloats(at0Im, store0Im);
-		wideStoreFloats(at1Re, store1Re);
-		wideStoreFloats(at1Im, store1Im);
+                WideFloat out0Re = in0Re + tRe;
+                WideFloat out0Im = in0Im + tIm;
+                WideFloat out1Re = in0Re - tRe;
+                WideFloat out1Im = in0Im - tIm;
 
-		WideFloat wOldRe = wRe;
-		WideFloat wOldIm = wIm;
-		wRe = wOldRe*wmQuRe - wOldIm*wmQuIm;
-		wIm = wOldRe*wmQuIm + wOldIm*wmQuRe;
+                WideFloat store0Re = wideMaskFloats(out0Re, in0Re, storeMask);
+                WideFloat store0Im = wideMaskFloats(out0Im, in0Im, storeMask);
+                WideFloat store1Re = wideMaskFloats(out1Re, in1Re, storeMask);
+                WideFloat store1Im = wideMaskFloats(out1Im, in1Im, storeMask);
 
-		at0Re += simdWidth;
-		at0Im += simdWidth;
-		at1Re += simdWidth;
-		at1Im += simdWidth;
-	      }
-	  }
+                wideStoreFloats(at0Re, store0Re);
+                wideStoreFloats(at0Im, store0Im);
+                wideStoreFloats(at1Re, store1Re);
+                wideStoreFloats(at1Im, store1Im);
+
+                WideFloat wOldRe = wRe;
+                WideFloat wOldIm = wIm;
+                wRe = wOldRe*wmQuRe - wOldIm*wmQuIm;
+                wIm = wOldRe*wmQuIm + wOldIm*wmQuRe;
+
+                at0Re += simdWidth;
+                at0Im += simdWidth;
+                at1Re += simdWidth;
+                at1Im += simdWidth;
+              }
+          }
       }
   }
-  
+
   ComplexBuffer result = {};
   result.count = count;
   result.reVals = reVals;
@@ -203,68 +261,68 @@ static IFFT_FUNCTION(ifft_dit_radix2_scalar)
   // NOTE: input permutation
   {
     PROFILE_BLOCK("ifft_dit_radix_2_scalar:input_permutation");
-    
+
     usz countLog2 = LOG2(count);
     r32 invCount = 1.f / (r32)count;
     r32 *srcRe = input.reVals;
     r32 *srcIm = input.imVals;
     for(u32 i = 0; i < count; ++i)
       {
-	u32 iRev = reverseBits(i) >> (sizeof(u32)*8 - countLog2);
-	reVals[iRev] = invCount * srcRe[i];
-	imVals[iRev] = invCount * srcIm[i];
+        u32 iRev = reverseBits(i) >> (sizeof(u32)*8 - countLog2);
+        reVals[iRev] = invCount * srcRe[i];
+        imVals[iRev] = invCount * srcIm[i];
       }
   }
-  
+
   // NOTE: twiddles
   {
     PROFILE_BLOCK("ifft_dit_radix_2_scalar:twiddles");
 
     for(u32 m = 2; m <= count; m <<= 1)
       {
-	r32 theta = 2.f * GS_PI / (r32)m;
-	r32 wmRe = gsCos(theta);
-	r32 wmIm = gsSin(theta);
-	
-	for(u32 k = 0; k < count; k += m)
-	  {
-	    r32 wRe = 1.f;
-	    r32 wIm = 0.f;
-	    r32 *at0Re = reVals + k;
-	    r32 *at0Im = imVals + k;
-	    r32 *at1Re = reVals + k + m/2;
-	    r32 *at1Im = imVals + k + m/2;
-	    for(u32 j = 0; j < m/2; ++j)
-	      {
-		PROFILE_BLOCK("ifft_dit_radix_2_scalar:kernel");
+        r32 theta = 2.f * GS_PI / (r32)m;
+        r32 wmRe = gsCos(theta);
+        r32 wmIm = gsSin(theta);
 
-		r32 in0Re = *at0Re;
-		r32 in0Im = *at0Im;
-		r32 in1Re = *at1Re;
-		r32 in1Im = *at1Im;
+        for(u32 k = 0; k < count; k += m)
+          {
+            r32 wRe = 1.f;
+            r32 wIm = 0.f;
+            r32 *at0Re = reVals + k;
+            r32 *at0Im = imVals + k;
+            r32 *at1Re = reVals + k + m/2;
+            r32 *at1Im = imVals + k + m/2;
+            for(u32 j = 0; j < m/2; ++j)
+              {
+                PROFILE_BLOCK("ifft_dit_radix_2_scalar:kernel");
 
-		r32 tRe = wRe*in1Re - wIm*in1Im;
-		r32 tIm = wRe*in1Im + wIm*in1Re;
+                r32 in0Re = *at0Re;
+                r32 in0Im = *at0Im;
+                r32 in1Re = *at1Re;
+                r32 in1Im = *at1Im;
 
-		r32 out0Re = in0Re + tRe;
-		r32 out0Im = in0Im + tIm;
-		r32 out1Re = in0Re - tRe;
-		r32 out1Im = in0Im - tIm;
+                r32 tRe = wRe*in1Re - wIm*in1Im;
+                r32 tIm = wRe*in1Im + wIm*in1Re;
 
-		*at0Re++ = out0Re;
-		*at0Im++ = out0Im;
-		*at1Re++ = out1Re;
-		*at1Im++ = out1Im;
+                r32 out0Re = in0Re + tRe;
+                r32 out0Im = in0Im + tIm;
+                r32 out1Re = in0Re - tRe;
+                r32 out1Im = in0Im - tIm;
 
-		r32 wOldRe = wRe;
-		r32 wOldIm = wIm;
-		wRe = wOldRe*wmRe - wOldIm*wmIm;
-		wIm = wOldRe*wmIm + wOldIm*wmRe;
-	      }
-	  }
+                *at0Re++ = out0Re;
+                *at0Im++ = out0Im;
+                *at1Re++ = out1Re;
+                *at1Im++ = out1Im;
+
+                r32 wOldRe = wRe;
+                r32 wOldIm = wIm;
+                wRe = wOldRe*wmRe - wOldIm*wmIm;
+                wIm = wOldRe*wmIm + wOldIm*wmRe;
+              }
+          }
       }
   }
-  
+
   FloatBuffer result = {};
   result.count = count;
   result.vals = reVals;
@@ -285,90 +343,90 @@ static IFFT_FUNCTION(ifft_dit_radix2_simd)
   // TODO: simd-ize
   {
     PROFILE_BLOCK("ifft_dit_radix2_simd:input_permutation");
-    
+
     usz countLog2 = LOG2(count);
     r32 invCount = 1.f / (r32)count;
     r32 *srcRe = input.reVals;
     r32 *srcIm = input.imVals;
     for(u32 i = 0; i < count; ++i)
       {
-	u32 iRev = reverseBits(i) >> (sizeof(u32)*8 - countLog2);
-	reVals[iRev] = invCount * srcRe[i];
-	imVals[iRev] = invCount * srcIm[i];
+        u32 iRev = reverseBits(i) >> (sizeof(u32)*8 - countLog2);
+        reVals[iRev] = invCount * srcRe[i];
+        imVals[iRev] = invCount * srcIm[i];
       }
   }
-  
+
   // NOTE: twiddles
   {
     PROFILE_BLOCK("ifft_dit_radix2_simd:twiddles");
-    
+
     for(u32 m = 2; m <= count; m <<= 1)
       {
-	r32 theta = 2.f * GS_PI / (r32)m;
-	c64 wm = C64Polar(1.f, theta);
-	c64 wmSq = wm*wm;
-	c64 wmCu = wmSq*wm;
-	c64 wmQu = wmCu*wm;	
-	WideFloat wmQuRe = wideSetConstantFloats(wmQu.re);
-	WideFloat wmQuIm = wideSetConstantFloats(wmQu.im);
-	
-	for(u32 k = 0; k < count; k += m)
-	  {
-	    WideFloat wRe = wideSetFloats(1.f, wm.re, wmSq.re, wmCu.re);
-	    WideFloat wIm = wideSetFloats(0.f, wm.im, wmSq.im, wmCu.im);
+        r32 theta = 2.f * GS_PI / (r32)m;
+        c64 wm = C64Polar(1.f, theta);
+        c64 wmSq = wm*wm;
+        c64 wmCu = wmSq*wm;
+        c64 wmQu = wmCu*wm;
+        WideFloat wmQuRe = wideSetConstantFloats(wmQu.re);
+        WideFloat wmQuIm = wideSetConstantFloats(wmQu.im);
 
-	    r32 *at0Re = reVals + k;
-	    r32 *at0Im = imVals + k;
-	    r32 *at1Re = reVals + k + m/2;
-	    r32 *at1Im = imVals + k + m/2;
-	    for(u32 j = 0; j < m/2; j += simdWidth)
-	      {
-		PROFILE_BLOCK("ifft_dit_radix2_simd:kernel");
-		
-		WideInt storeMask = wideSetConstantInts(0);
-		for(u32 lane = 0; lane < simdWidth; ++lane)
-		  {
-		    u32 val = (j + lane < m/2) ? 0xFFFFFFFF : 0;
-		    wideSetLaneInts(&storeMask, val, lane);
-		  }
+        for(u32 k = 0; k < count; k += m)
+          {
+            WideFloat wRe = wideSetFloats(1.f, wm.re, wmSq.re, wmCu.re);
+            WideFloat wIm = wideSetFloats(0.f, wm.im, wmSq.im, wmCu.im);
 
-		WideFloat in0Re = wideLoadFloats(at0Re);
-		WideFloat in0Im = wideLoadFloats(at0Im);
-		WideFloat in1Re = wideLoadFloats(at1Re);
-		WideFloat in1Im = wideLoadFloats(at1Im);
+            r32 *at0Re = reVals + k;
+            r32 *at0Im = imVals + k;
+            r32 *at1Re = reVals + k + m/2;
+            r32 *at1Im = imVals + k + m/2;
+            for(u32 j = 0; j < m/2; j += simdWidth)
+              {
+                PROFILE_BLOCK("ifft_dit_radix2_simd:kernel");
 
-		WideFloat tRe = wRe*in1Re - wIm*in1Im;
-		WideFloat tIm = wRe*in1Im + wIm*in1Re;
+                WideInt storeMask = wideSetConstantInts(0);
+                for(u32 lane = 0; lane < simdWidth; ++lane)
+                  {
+                    u32 val = (j + lane < m/2) ? 0xFFFFFFFF : 0;
+                    wideSetLaneInts(&storeMask, val, lane);
+                  }
 
-		WideFloat out0Re = in0Re + tRe;
-		WideFloat out0Im = in0Im + tIm;
-		WideFloat out1Re = in0Re - tRe;
-		WideFloat out1Im = in0Im - tIm;
+                WideFloat in0Re = wideLoadFloats(at0Re);
+                WideFloat in0Im = wideLoadFloats(at0Im);
+                WideFloat in1Re = wideLoadFloats(at1Re);
+                WideFloat in1Im = wideLoadFloats(at1Im);
 
-		WideFloat store0Re = wideMaskFloats(out0Re, in0Re, storeMask);
-		WideFloat store0Im = wideMaskFloats(out0Im, in0Im, storeMask);
-		WideFloat store1Re = wideMaskFloats(out1Re, in1Re, storeMask);
-		WideFloat store1Im = wideMaskFloats(out1Im, in1Im, storeMask);
+                WideFloat tRe = wRe*in1Re - wIm*in1Im;
+                WideFloat tIm = wRe*in1Im + wIm*in1Re;
 
-		wideStoreFloats(at0Re, store0Re);
-		wideStoreFloats(at0Im, store0Im);
-		wideStoreFloats(at1Re, store1Re);
-		wideStoreFloats(at1Im, store1Im);
+                WideFloat out0Re = in0Re + tRe;
+                WideFloat out0Im = in0Im + tIm;
+                WideFloat out1Re = in0Re - tRe;
+                WideFloat out1Im = in0Im - tIm;
 
-		WideFloat wOldRe = wRe;
-		WideFloat wOldIm = wIm;
-		wRe = wOldRe*wmQuRe - wOldIm*wmQuIm;
-		wIm = wOldRe*wmQuIm + wOldIm*wmQuRe;
+                WideFloat store0Re = wideMaskFloats(out0Re, in0Re, storeMask);
+                WideFloat store0Im = wideMaskFloats(out0Im, in0Im, storeMask);
+                WideFloat store1Re = wideMaskFloats(out1Re, in1Re, storeMask);
+                WideFloat store1Im = wideMaskFloats(out1Im, in1Im, storeMask);
 
-		at0Re += simdWidth;
-		at0Im += simdWidth;
-		at1Re += simdWidth;
-		at1Im += simdWidth;
-	      }
-	  }
+                wideStoreFloats(at0Re, store0Re);
+                wideStoreFloats(at0Im, store0Im);
+                wideStoreFloats(at1Re, store1Re);
+                wideStoreFloats(at1Im, store1Im);
+
+                WideFloat wOldRe = wRe;
+                WideFloat wOldIm = wIm;
+                wRe = wOldRe*wmQuRe - wOldIm*wmQuIm;
+                wIm = wOldRe*wmQuIm + wOldIm*wmQuRe;
+
+                at0Re += simdWidth;
+                at0Im += simdWidth;
+                at1Re += simdWidth;
+                at1Im += simdWidth;
+              }
+          }
       }
   }
-  
+
   FloatBuffer result = {};
   result.count = count;
   result.vals = reVals;
@@ -408,7 +466,7 @@ static REAL_FFT_FUNCTION(fft_real_permute)
       u32 reversedIndex = reverseBits(index);
       reversedIndex >>= lengthSizeInBits - logLength;
       ASSERT(reversedIndex < length);
-      
+
       destRe[index] = src[reversedIndex];
     }
 
@@ -418,7 +476,7 @@ static REAL_FFT_FUNCTION(fft_real_permute)
   for(u32 m = 2; m <= length; m <<= 1)
     {
       r32 angle = -GS_TAU/(r32)m;
-      
+
       // TODO: make trig ops fast
       c64 wm = C64Polar(1.f, angle);
       // TODO: maybe do these multiplies wide as well?
@@ -429,78 +487,78 @@ static REAL_FFT_FUNCTION(fft_real_permute)
       WideFloat wmQuIm = wideSetConstantFloats(wmQu.im);
 
       for(u32 k = 0; k < length; k += m)
-	{	  
-	  WideFloat wRe = wideSetFloats(1.f, wm.re, wmSq.re, wmCu.re);
-	  WideFloat wIm = wideSetFloats(0.f, wm.im, wmSq.im, wmCu.im);
-	  	      
-	  r32 *dest0Re = destRe + k;
-	  r32 *dest0Im = destIm + k;
-	  r32 *dest1Re = destRe + k + m/2;
-	  r32 *dest1Im = destIm + k + m/2;
-	  for(u32 j = 0; j < m/2; j += simdWidth)
-	    {
-	      WideInt storeMask = wideSetConstantInts(0);
-	      //WideFloat storeMaskInv = wideSetConstantFloats(0.f);
-	      for(u32 lane = 0; lane < simdWidth; ++lane)
-		{
-		  //r32 val = (j + lane < m/2) ? maskF : 0;
-		  //r32 valInv = (j + lane < m/2) ? 0 : maskF;
-		  u32 val = (j + lane < m/2) ? mask : 0;
-		  
-		  wideSetLaneInts(&storeMask, val, lane);
-		  //wideSetLaneFloats(&storeMaskInv, valInv, lane);
-		}
+        {
+          WideFloat wRe = wideSetFloats(1.f, wm.re, wmSq.re, wmCu.re);
+          WideFloat wIm = wideSetFloats(0.f, wm.im, wmSq.im, wmCu.im);
 
-	      // NOTE: loads
-	      WideFloat in0Re = wideLoadFloats(dest0Re);
-	      WideFloat in0Im = wideLoadFloats(dest0Im);
-	      WideFloat in1Re = wideLoadFloats(dest1Re);
-	      WideFloat in1Im = wideLoadFloats(dest1Im);
+          r32 *dest0Re = destRe + k;
+          r32 *dest0Im = destIm + k;
+          r32 *dest1Re = destRe + k + m/2;
+          r32 *dest1Im = destIm + k + m/2;
+          for(u32 j = 0; j < m/2; j += simdWidth)
+            {
+              WideInt storeMask = wideSetConstantInts(0);
+              //WideFloat storeMaskInv = wideSetConstantFloats(0.f);
+              for(u32 lane = 0; lane < simdWidth; ++lane)
+                {
+                  //r32 val = (j + lane < m/2) ? maskF : 0;
+                  //r32 valInv = (j + lane < m/2) ? 0 : maskF;
+                  u32 val = (j + lane < m/2) ? mask : 0;
 
-	      // NOTE: butterflies and twiddles
-	      WideFloat productRe = wideSubFloats(wideMulFloats(wRe, in1Re),
-						  wideMulFloats(wIm, in1Im));
-	      WideFloat productIm = wideAddFloats(wideMulFloats(wRe, in1Im),
-						  wideMulFloats(wIm, in1Re));
-	      WideFloat out0Re = wideAddFloats(in0Re, productRe);
-	      WideFloat out0Im = wideAddFloats(in0Im, productIm);
-	      WideFloat out1Re = wideSubFloats(in0Re, productRe);
-	      WideFloat out1Im = wideSubFloats(in0Im, productIm);
+                  wideSetLaneInts(&storeMask, val, lane);
+                  //wideSetLaneFloats(&storeMaskInv, valInv, lane);
+                }
 
-	      // NOTE: mask out what not to store
-	      /* WideFloat store0Re = wideAddFloats(wideMaskFloats(out0Re, storeMask), */
-	      /* 					 wideMaskFloats(in0Re, storeMaskInv)); */
-	      /* WideFloat store0Im = wideAddFloats(wideMaskFloats(out0Im, storeMask), */
-	      /* 					 wideMaskFloats(in0Im, storeMaskInv)); */
-	      /* WideFloat store1Re = wideAddFloats(wideMaskFloats(out1Re, storeMask), */
-	      /* 					 wideMaskFloats(in1Re, storeMaskInv)); */
-	      /* WideFloat store1Im = wideAddFloats(wideMaskFloats(out1Im, storeMask), */
-	      /* 					 wideMaskFloats(in1Im, storeMaskInv)); */
+              // NOTE: loads
+              WideFloat in0Re = wideLoadFloats(dest0Re);
+              WideFloat in0Im = wideLoadFloats(dest0Im);
+              WideFloat in1Re = wideLoadFloats(dest1Re);
+              WideFloat in1Im = wideLoadFloats(dest1Im);
 
-	      WideFloat store0Re = wideMaskFloats(out0Re, in0Re, storeMask);
-	      WideFloat store0Im = wideMaskFloats(out0Im, in0Im, storeMask);
-	      WideFloat store1Re = wideMaskFloats(out1Re, in1Re, storeMask);
-	      WideFloat store1Im = wideMaskFloats(out1Im, in1Im, storeMask);
+              // NOTE: butterflies and twiddles
+              WideFloat productRe = wideSubFloats(wideMulFloats(wRe, in1Re),
+                                                  wideMulFloats(wIm, in1Im));
+              WideFloat productIm = wideAddFloats(wideMulFloats(wRe, in1Im),
+                                                  wideMulFloats(wIm, in1Re));
+              WideFloat out0Re = wideAddFloats(in0Re, productRe);
+              WideFloat out0Im = wideAddFloats(in0Im, productIm);
+              WideFloat out1Re = wideSubFloats(in0Re, productRe);
+              WideFloat out1Im = wideSubFloats(in0Im, productIm);
 
-	      // NOTE: do the store
-	      wideStoreFloats(dest0Re, store0Re);
-	      wideStoreFloats(dest0Im, store0Im);
-	      wideStoreFloats(dest1Re, store1Re);
-	      wideStoreFloats(dest1Im, store1Im);
+              // NOTE: mask out what not to store
+              /* WideFloat store0Re = wideAddFloats(wideMaskFloats(out0Re, storeMask), */
+              /*                                         wideMaskFloats(in0Re, storeMaskInv)); */
+              /* WideFloat store0Im = wideAddFloats(wideMaskFloats(out0Im, storeMask), */
+              /*                                         wideMaskFloats(in0Im, storeMaskInv)); */
+              /* WideFloat store1Re = wideAddFloats(wideMaskFloats(out1Re, storeMask), */
+              /*                                         wideMaskFloats(in1Re, storeMaskInv)); */
+              /* WideFloat store1Im = wideAddFloats(wideMaskFloats(out1Im, storeMask), */
+              /*                                         wideMaskFloats(in1Im, storeMaskInv)); */
 
-	      WideFloat wReOld = wRe;
-	      WideFloat wImOld = wIm;
-	      wRe = wideSubFloats(wideMulFloats(wReOld, wmQuRe),
-				  wideMulFloats(wImOld, wmQuIm));
-	      wIm = wideAddFloats(wideMulFloats(wReOld, wmQuIm),
-				  wideMulFloats(wImOld, wmQuRe));
+              WideFloat store0Re = wideMaskFloats(out0Re, in0Re, storeMask);
+              WideFloat store0Im = wideMaskFloats(out0Im, in0Im, storeMask);
+              WideFloat store1Re = wideMaskFloats(out1Re, in1Re, storeMask);
+              WideFloat store1Im = wideMaskFloats(out1Im, in1Im, storeMask);
 
-	      dest0Re += simdWidth;
-	      dest0Im += simdWidth;
-	      dest1Re += simdWidth;
-	      dest1Im += simdWidth;
-	    }
-	}
+              // NOTE: do the store
+              wideStoreFloats(dest0Re, store0Re);
+              wideStoreFloats(dest0Im, store0Im);
+              wideStoreFloats(dest1Re, store1Re);
+              wideStoreFloats(dest1Im, store1Im);
+
+              WideFloat wReOld = wRe;
+              WideFloat wImOld = wIm;
+              wRe = wideSubFloats(wideMulFloats(wReOld, wmQuRe),
+                                  wideMulFloats(wImOld, wmQuIm));
+              wIm = wideAddFloats(wideMulFloats(wReOld, wmQuIm),
+                                  wideMulFloats(wImOld, wmQuRe));
+
+              dest0Re += simdWidth;
+              dest0Im += simdWidth;
+              dest1Re += simdWidth;
+              dest1Im += simdWidth;
+            }
+        }
     }
 }
 
@@ -518,7 +576,7 @@ static REAL_IFFT_FUNCTION(ifft_real_permute)
       u32 reversedIndex = reverseBits(index);
       reversedIndex >>= lengthSizeInBits - logLength;
       ASSERT(reversedIndex < length);
-      
+
       dest[index] = invLength*srcRe[reversedIndex];
       destImTemp[index] = invLength*srcIm[reversedIndex];
     }
@@ -529,7 +587,7 @@ static REAL_IFFT_FUNCTION(ifft_real_permute)
   for(u32 m = 2; m <= length; m <<= 1)
     {
       r32 angle = GS_TAU/(r32)m;
-      
+
       // TODO: make trig ops fast
       c64 wm = C64Polar(1.f, angle);
       // TODO: maybe do these multiplies wide as well?
@@ -540,78 +598,78 @@ static REAL_IFFT_FUNCTION(ifft_real_permute)
       WideFloat wmQuIm = wideSetConstantFloats(wmQu.im);
 
       for(u32 k = 0; k < length; k += m)
-	{	  
-	  WideFloat wRe = wideSetFloats(1.f, wm.re, wmSq.re, wmCu.re);
-	  WideFloat wIm = wideSetFloats(0.f, wm.im, wmSq.im, wmCu.im);
-	  	      
-	  r32 *dest0Re = dest + k;
-	  r32 *dest0Im = destImTemp + k;
-	  r32 *dest1Re = dest + k + m/2;
-	  r32 *dest1Im = destImTemp + k + m/2;
-	  for(u32 j = 0; j < m/2; j += simdWidth)
-	    {
-	      WideInt storeMask = wideSetConstantInts(0.f);
-	      //WideFloat storeMaskInv = wideSetConstantFloats(0.f);
-	      for(u32 lane = 0; lane < simdWidth; ++lane)
-		{
-		  //r32 val = (j + lane < m/2) ? maskF : 0;
-		  //r32 valInv = (j + lane < m/2) ? 0 : maskF;
-		  u32 val = (j + lane < m/2) ? mask : 0;
-		  
-		  wideSetLaneInts(&storeMask, val, lane);
-		  //wideSetLaneFloats(&storeMaskInv, valInv, lane);
-		}
+        {
+          WideFloat wRe = wideSetFloats(1.f, wm.re, wmSq.re, wmCu.re);
+          WideFloat wIm = wideSetFloats(0.f, wm.im, wmSq.im, wmCu.im);
 
-	      // NOTE: loads
-	      WideFloat in0Re = wideLoadFloats(dest0Re);
-	      WideFloat in0Im = wideLoadFloats(dest0Im);
-	      WideFloat in1Re = wideLoadFloats(dest1Re);
-	      WideFloat in1Im = wideLoadFloats(dest1Im);
+          r32 *dest0Re = dest + k;
+          r32 *dest0Im = destImTemp + k;
+          r32 *dest1Re = dest + k + m/2;
+          r32 *dest1Im = destImTemp + k + m/2;
+          for(u32 j = 0; j < m/2; j += simdWidth)
+            {
+              WideInt storeMask = wideSetConstantInts(0.f);
+              //WideFloat storeMaskInv = wideSetConstantFloats(0.f);
+              for(u32 lane = 0; lane < simdWidth; ++lane)
+                {
+                  //r32 val = (j + lane < m/2) ? maskF : 0;
+                  //r32 valInv = (j + lane < m/2) ? 0 : maskF;
+                  u32 val = (j + lane < m/2) ? mask : 0;
 
-	      // NOTE: butterflies and twiddles
-	      WideFloat productRe = wideSubFloats(wideMulFloats(wRe, in1Re),
-						  wideMulFloats(wIm, in1Im));
-	      WideFloat productIm = wideAddFloats(wideMulFloats(wRe, in1Im),
-						  wideMulFloats(wIm, in1Re));
-	      WideFloat out0Re = wideAddFloats(in0Re, productRe);
-	      WideFloat out0Im = wideAddFloats(in0Im, productIm);
-	      WideFloat out1Re = wideSubFloats(in0Re, productRe);
-	      WideFloat out1Im = wideSubFloats(in0Im, productIm);
+                  wideSetLaneInts(&storeMask, val, lane);
+                  //wideSetLaneFloats(&storeMaskInv, valInv, lane);
+                }
 
-	      // NOTE: mask out what not to store
-	      /* WideFloat store0Re = wideAddFloats(wideMaskFloats(out0Re, storeMask), */
-	      /* 					 wideMaskFloats(in0Re, storeMaskInv)); */
-	      /* WideFloat store0Im = wideAddFloats(wideMaskFloats(out0Im, storeMask), */
-	      /* 					 wideMaskFloats(in0Im, storeMaskInv)); */
-	      /* WideFloat store1Re = wideAddFloats(wideMaskFloats(out1Re, storeMask), */
-	      /* 					 wideMaskFloats(in1Re, storeMaskInv)); */
-	      /* WideFloat store1Im = wideAddFloats(wideMaskFloats(out1Im, storeMask), */
-	      /* 					 wideMaskFloats(in1Im, storeMaskInv)); */
+              // NOTE: loads
+              WideFloat in0Re = wideLoadFloats(dest0Re);
+              WideFloat in0Im = wideLoadFloats(dest0Im);
+              WideFloat in1Re = wideLoadFloats(dest1Re);
+              WideFloat in1Im = wideLoadFloats(dest1Im);
 
-	      WideFloat store0Re = wideMaskFloats(out0Re, in0Re, storeMask);
-	      WideFloat store0Im = wideMaskFloats(out0Im, in0Im, storeMask);
-	      WideFloat store1Re = wideMaskFloats(out1Re, in1Re, storeMask);
-	      WideFloat store1Im = wideMaskFloats(out1Im, in1Im, storeMask);
+              // NOTE: butterflies and twiddles
+              WideFloat productRe = wideSubFloats(wideMulFloats(wRe, in1Re),
+                                                  wideMulFloats(wIm, in1Im));
+              WideFloat productIm = wideAddFloats(wideMulFloats(wRe, in1Im),
+                                                  wideMulFloats(wIm, in1Re));
+              WideFloat out0Re = wideAddFloats(in0Re, productRe);
+              WideFloat out0Im = wideAddFloats(in0Im, productIm);
+              WideFloat out1Re = wideSubFloats(in0Re, productRe);
+              WideFloat out1Im = wideSubFloats(in0Im, productIm);
 
-	      // NOTE: do the store
-	      wideStoreFloats(dest0Re, store0Re);
-	      wideStoreFloats(dest0Im, store0Im);
-	      wideStoreFloats(dest1Re, store1Re);
-	      wideStoreFloats(dest1Im, store1Im);
+              // NOTE: mask out what not to store
+              /* WideFloat store0Re = wideAddFloats(wideMaskFloats(out0Re, storeMask), */
+              /*                                         wideMaskFloats(in0Re, storeMaskInv)); */
+              /* WideFloat store0Im = wideAddFloats(wideMaskFloats(out0Im, storeMask), */
+              /*                                         wideMaskFloats(in0Im, storeMaskInv)); */
+              /* WideFloat store1Re = wideAddFloats(wideMaskFloats(out1Re, storeMask), */
+              /*                                         wideMaskFloats(in1Re, storeMaskInv)); */
+              /* WideFloat store1Im = wideAddFloats(wideMaskFloats(out1Im, storeMask), */
+              /*                                         wideMaskFloats(in1Im, storeMaskInv)); */
 
-	      WideFloat wReOld = wRe;
-	      WideFloat wImOld = wIm;
-	      wRe = wideSubFloats(wideMulFloats(wReOld, wmQuRe),
-				  wideMulFloats(wImOld, wmQuIm));
-	      wIm = wideAddFloats(wideMulFloats(wReOld, wmQuIm),
-				  wideMulFloats(wImOld, wmQuRe));
+              WideFloat store0Re = wideMaskFloats(out0Re, in0Re, storeMask);
+              WideFloat store0Im = wideMaskFloats(out0Im, in0Im, storeMask);
+              WideFloat store1Re = wideMaskFloats(out1Re, in1Re, storeMask);
+              WideFloat store1Im = wideMaskFloats(out1Im, in1Im, storeMask);
 
-	      dest0Re += simdWidth;
-	      dest0Im += simdWidth;
-	      dest1Re += simdWidth;
-	      dest1Im += simdWidth;
-	    }
-	}
+              // NOTE: do the store
+              wideStoreFloats(dest0Re, store0Re);
+              wideStoreFloats(dest0Im, store0Im);
+              wideStoreFloats(dest1Re, store1Re);
+              wideStoreFloats(dest1Im, store1Im);
+
+              WideFloat wReOld = wRe;
+              WideFloat wImOld = wIm;
+              wRe = wideSubFloats(wideMulFloats(wReOld, wmQuRe),
+                                  wideMulFloats(wImOld, wmQuIm));
+              wIm = wideAddFloats(wideMulFloats(wReOld, wmQuIm),
+                                  wideMulFloats(wImOld, wmQuRe));
+
+              dest0Re += simdWidth;
+              dest0Im += simdWidth;
+              dest1Re += simdWidth;
+              dest1Im += simdWidth;
+            }
+        }
     }
 }
 
@@ -621,7 +679,7 @@ static REAL_FFT_FUNCTION(fft_real_noPermute)
   ASSERT(isPowerOf2(length));
   //u32 logLength = log2(length);
   u32 simdWidth = 4;
-  
+
   // NOTE: copy input
   r32 *read = src;
   r32 *write = destRe;
@@ -629,7 +687,7 @@ static REAL_FFT_FUNCTION(fft_real_noPermute)
     {
       //WideFloat in = wideLoadFloats(src);
       WideFloat in = wideLoadFloats(read);
-      wideStoreFloats(write, in);      
+      wideStoreFloats(write, in);
 
       read += simdWidth;
       write += simdWidth;
@@ -650,114 +708,114 @@ static REAL_FFT_FUNCTION(fft_real_noPermute)
       WideFloat wmQuIm = wideSetConstantFloats(wmQu.im);
 
       for(u32 k = 0; k < length; k += m)
-	{
-	  WideFloat wRe = wideSetFloats(1.f, wm.re, wmSq.re, wmCu.re);
-	  WideFloat wIm = wideSetFloats(0.f, wm.im, wmSq.im, wmCu.im);
+        {
+          WideFloat wRe = wideSetFloats(1.f, wm.re, wmSq.re, wmCu.re);
+          WideFloat wIm = wideSetFloats(0.f, wm.im, wmSq.im, wmCu.im);
 
-	  r32 *dest0Re = destRe + k;
-	  r32 *dest0Im = destIm + k;
-	  r32 *dest1Re = destRe + k + m/2;
-	  r32 *dest1Im = destIm + k + m/2;
-	  for(u32 j = 0; j < m/2; j += simdWidth)
-	    {
-	      /* WideFloat storeMask = wideSetConstantFloats(0.f); */
-	      /* WideFloat storeMaskInv = wideSetConstantFloats(0.f); */
-	      /* for(u32 lane = 0; lane < simdWidth; ++lane) */
-	      /* 	{ */
-	      /* 	  r32 val = (j + lane < m/2) ? maskF : 0.f; */
-	      /* 	  r32 valInv = (j + lane < m/2) ? 0.f : maskF; */
+          r32 *dest0Re = destRe + k;
+          r32 *dest0Im = destIm + k;
+          r32 *dest1Re = destRe + k + m/2;
+          r32 *dest1Im = destIm + k + m/2;
+          for(u32 j = 0; j < m/2; j += simdWidth)
+            {
+              /* WideFloat storeMask = wideSetConstantFloats(0.f); */
+              /* WideFloat storeMaskInv = wideSetConstantFloats(0.f); */
+              /* for(u32 lane = 0; lane < simdWidth; ++lane) */
+              /*        { */
+              /*          r32 val = (j + lane < m/2) ? maskF : 0.f; */
+              /*          r32 valInv = (j + lane < m/2) ? 0.f : maskF; */
 
-	      /* 	  wideSetLaneFloats(&storeMask, val, lane); */
-	      /* 	  wideSetLaneFloats(&storeMaskInv, valInv, lane); */
-	      /* 	} */
+              /*          wideSetLaneFloats(&storeMask, val, lane); */
+              /*          wideSetLaneFloats(&storeMaskInv, valInv, lane); */
+              /*        } */
 
-	      WideFloat in0Re = wideLoadFloats(dest0Re);
-	      WideFloat in0Im = wideLoadFloats(dest0Im);
-	      WideFloat in1Re = wideLoadFloats(dest1Re);
-	      WideFloat in1Im = wideLoadFloats(dest1Im);
+              WideFloat in0Re = wideLoadFloats(dest0Re);
+              WideFloat in0Im = wideLoadFloats(dest0Im);
+              WideFloat in1Re = wideLoadFloats(dest1Re);
+              WideFloat in1Im = wideLoadFloats(dest1Im);
 
-	      // NOTE: butterflies/twiddles
-	      WideFloat out0Re = wideAddFloats(in0Re, in1Re);
-	      WideFloat out0Im = wideAddFloats(in0Im, in1Im);
-	      WideFloat diffRe = wideSubFloats(in0Re, in1Re);
-	      WideFloat diffIm = wideSubFloats(in0Im, in1Im);
-	      WideFloat out1Re = wideSubFloats(wideMulFloats(diffRe, wRe),
-					       wideMulFloats(diffIm, wIm));
-	      WideFloat out1Im = wideAddFloats(wideMulFloats(diffRe, wIm),
-					       wideMulFloats(diffIm, wRe));
+              // NOTE: butterflies/twiddles
+              WideFloat out0Re = wideAddFloats(in0Re, in1Re);
+              WideFloat out0Im = wideAddFloats(in0Im, in1Im);
+              WideFloat diffRe = wideSubFloats(in0Re, in1Re);
+              WideFloat diffIm = wideSubFloats(in0Im, in1Im);
+              WideFloat out1Re = wideSubFloats(wideMulFloats(diffRe, wRe),
+                                               wideMulFloats(diffIm, wIm));
+              WideFloat out1Im = wideAddFloats(wideMulFloats(diffRe, wIm),
+                                               wideMulFloats(diffIm, wRe));
 
-	      /* WideFloat store0Re = wideAddFloats(wideMaskFloats(out0Re, storeMask), */
-	      /* 					 wideMaskFloats(in0Re, storeMaskInv)); */
-	      /* WideFloat store0Im = wideAddFloats(wideMaskFloats(out0Im, storeMask), */
-	      /* 					 wideMaskFloats(in0Im, storeMaskInv)); */
-	      /* WideFloat store1Re = wideAddFloats(wideMaskFloats(out1Re, storeMask), */
-	      /* 					 wideMaskFloats(in1Re, storeMaskInv)); */
-	      /* WideFloat store1Im = wideAddFloats(wideMaskFloats(out1Im, storeMask), */
-	      /* 					 wideMaskFloats(in1Im, storeMaskInv)); */
+              /* WideFloat store0Re = wideAddFloats(wideMaskFloats(out0Re, storeMask), */
+              /*                                         wideMaskFloats(in0Re, storeMaskInv)); */
+              /* WideFloat store0Im = wideAddFloats(wideMaskFloats(out0Im, storeMask), */
+              /*                                         wideMaskFloats(in0Im, storeMaskInv)); */
+              /* WideFloat store1Re = wideAddFloats(wideMaskFloats(out1Re, storeMask), */
+              /*                                         wideMaskFloats(in1Re, storeMaskInv)); */
+              /* WideFloat store1Im = wideAddFloats(wideMaskFloats(out1Im, storeMask), */
+              /*                                         wideMaskFloats(in1Im, storeMaskInv)); */
 
-	      /* wideStoreFloats(dest0Re, store0Re); */
-	      /* wideStoreFloats(dest0Im, store0Im); */
-	      /* wideStoreFloats(dest1Re, store1Re); */
-	      /* wideStoreFloats(dest1Im, store1Im); */
-	      wideStoreFloats(dest0Re, out0Re);
-	      wideStoreFloats(dest0Im, out0Im);
-	      wideStoreFloats(dest1Re, out1Re);
-	      wideStoreFloats(dest1Im, out1Im);
+              /* wideStoreFloats(dest0Re, store0Re); */
+              /* wideStoreFloats(dest0Im, store0Im); */
+              /* wideStoreFloats(dest1Re, store1Re); */
+              /* wideStoreFloats(dest1Im, store1Im); */
+              wideStoreFloats(dest0Re, out0Re);
+              wideStoreFloats(dest0Im, out0Im);
+              wideStoreFloats(dest1Re, out1Re);
+              wideStoreFloats(dest1Im, out1Im);
 
-	      WideFloat wReOld = wRe;
-	      WideFloat wImOld = wIm;
-	      wRe = wideSubFloats(wideMulFloats(wReOld, wmQuRe),
-				  wideMulFloats(wImOld, wmQuIm));
-	      wIm = wideAddFloats(wideMulFloats(wReOld, wmQuIm),
-				  wideMulFloats(wImOld, wmQuRe));
-		
-	      dest0Re += simdWidth;
-	      dest0Im += simdWidth;
-	      dest1Re += simdWidth;
-	      dest1Im += simdWidth;
-	    }
-	}
-    }  
+              WideFloat wReOld = wRe;
+              WideFloat wImOld = wIm;
+              wRe = wideSubFloats(wideMulFloats(wReOld, wmQuRe),
+                                  wideMulFloats(wImOld, wmQuIm));
+              wIm = wideAddFloats(wideMulFloats(wReOld, wmQuIm),
+                                  wideMulFloats(wImOld, wmQuRe));
+
+              dest0Re += simdWidth;
+              dest0Im += simdWidth;
+              dest1Re += simdWidth;
+              dest1Im += simdWidth;
+            }
+        }
+    }
   for(u32 m = simdWidth; m >= 2; m >>= 1)
     {
       r32 angle = -GS_TAU/(r32)m;
       c64 wm = C64Polar(1.f, angle);
       r32 wmRe = wm.re;
       r32 wmIm = wm.im;
-      
+
       for(u32 k = 0; k < length; k += m)
-	{
-	  r32 wRe = 1.f;
-	  r32 wIm = 0.f;
+        {
+          r32 wRe = 1.f;
+          r32 wIm = 0.f;
 
-	  r32 *dest0Re = destRe + k;
-	  r32 *dest0Im = destIm + k;
-	  r32 *dest1Re = destRe + k + m/2;
-	  r32 *dest1Im = destIm + k + m/2;
-	  for(u32 j = 0; j < m/2; ++j)
-	    {
-	      r32 in0Re = *dest0Re;
-	      r32 in0Im = *dest0Im;
-	      r32 in1Re = *dest1Re;
-	      r32 in1Im = *dest1Im;
+          r32 *dest0Re = destRe + k;
+          r32 *dest0Im = destIm + k;
+          r32 *dest1Re = destRe + k + m/2;
+          r32 *dest1Im = destIm + k + m/2;
+          for(u32 j = 0; j < m/2; ++j)
+            {
+              r32 in0Re = *dest0Re;
+              r32 in0Im = *dest0Im;
+              r32 in1Re = *dest1Re;
+              r32 in1Im = *dest1Im;
 
-	      r32 out0Re = in0Re + in1Re;
-	      r32 out0Im = in0Im + in1Im;
-	      r32 diffRe = in0Re - in1Re;
-	      r32 diffIm = in0Im - in1Im;
-	      r32 out1Re = diffRe*wRe - diffIm*wIm;
-	      r32 out1Im = diffRe*wIm + diffIm*wRe;
+              r32 out0Re = in0Re + in1Re;
+              r32 out0Im = in0Im + in1Im;
+              r32 diffRe = in0Re - in1Re;
+              r32 diffIm = in0Im - in1Im;
+              r32 out1Re = diffRe*wRe - diffIm*wIm;
+              r32 out1Im = diffRe*wIm + diffIm*wRe;
 
-	      *dest0Re++ = out0Re;
-	      *dest0Im++ = out0Im;
-	      *dest1Re++ = out1Re;
-	      *dest1Im++ = out1Im;
+              *dest0Re++ = out0Re;
+              *dest0Im++ = out0Im;
+              *dest1Re++ = out1Re;
+              *dest1Im++ = out1Im;
 
-	      r32 wReOld = wRe;
-	      wRe = wReOld*wmRe - wIm*wmIm;
-	      wIm = wReOld*wmIm + wIm*wmRe;
-	    }
-	}
+              r32 wReOld = wRe;
+              wRe = wReOld*wmRe - wIm*wmIm;
+              wIm = wReOld*wmIm + wIm*wmRe;
+            }
+        }
     }
 }
 
@@ -767,7 +825,7 @@ static REAL_IFFT_FUNCTION(ifft_real_noPermute)
   ASSERT(isPowerOf2(length));
   WideFloat invLength = wideSetConstantFloats(1.f/(r32)length);
   u32 simdWidth = 4;
-  
+
   // NOTE: copy input
   r32 *readRe = srcRe;
   r32 *readIm = srcIm;
@@ -777,7 +835,7 @@ static REAL_IFFT_FUNCTION(ifft_real_noPermute)
     {
       WideFloat inRe = wideLoadFloats(readRe);
       WideFloat inIm = wideLoadFloats(readIm);
-      
+
       wideStoreFloats(writeRe, wideMulFloats(invLength, inRe));
       wideStoreFloats(writeIm, wideMulFloats(invLength, inIm));
 
@@ -797,43 +855,43 @@ static REAL_IFFT_FUNCTION(ifft_real_noPermute)
       r32 wmIm = wm.im;
 
       for(u32 k = 0; k < length; k += m)
-	{
-	  r32 wRe = 1.f;
-	  r32 wIm = 0.f;
+        {
+          r32 wRe = 1.f;
+          r32 wIm = 0.f;
 
-	  r32 *dest0Re = dest + k;
-	  r32 *dest0Im = destImTemp + k;
-	  r32 *dest1Re = dest + k + m/2;
-	  r32 *dest1Im = destImTemp + k + m/2;
-	  for(u32 j = 0; j < m/2; ++j)
-	    {
-	      r32 in0Re = *dest0Re;
-	      r32 in0Im = *dest0Im;
-	      r32 in1Re = *dest1Re;
-	      r32 in1Im = *dest1Im;
+          r32 *dest0Re = dest + k;
+          r32 *dest0Im = destImTemp + k;
+          r32 *dest1Re = dest + k + m/2;
+          r32 *dest1Im = destImTemp + k + m/2;
+          for(u32 j = 0; j < m/2; ++j)
+            {
+              r32 in0Re = *dest0Re;
+              r32 in0Im = *dest0Im;
+              r32 in1Re = *dest1Re;
+              r32 in1Im = *dest1Im;
 
-	      r32 productRe = in1Re*wRe - in1Im*wIm;
-	      r32 productIm = in1Re*wIm + in1Im*wRe;
-	      r32 out0Re = in0Re + productRe;
-	      r32 out0Im = in0Im + productIm;
-	      r32 out1Re = in0Re - productRe;
-	      r32 out1Im = in0Im - productIm;
+              r32 productRe = in1Re*wRe - in1Im*wIm;
+              r32 productIm = in1Re*wIm + in1Im*wRe;
+              r32 out0Re = in0Re + productRe;
+              r32 out0Im = in0Im + productIm;
+              r32 out1Re = in0Re - productRe;
+              r32 out1Im = in0Im - productIm;
 
-	      *dest0Re++ = out0Re;
-	      *dest0Im++ = out0Im;
-	      *dest1Re++ = out1Re;
-	      *dest1Im++ = out1Im;
+              *dest0Re++ = out0Re;
+              *dest0Im++ = out0Im;
+              *dest1Re++ = out1Re;
+              *dest1Im++ = out1Im;
 
-	      r32 wReOld = wRe;
-	      wRe = wReOld*wmRe - wIm*wmIm;
-	      wIm = wReOld*wmIm + wIm*wmRe;
-	    }
-	}
+              r32 wReOld = wRe;
+              wRe = wReOld*wmRe - wIm*wmIm;
+              wIm = wReOld*wmIm + wIm*wmRe;
+            }
+        }
     }
   for(u32 m = 2*simdWidth; m <= length; m <<= 1)
     {
       r32 angle = GS_TAU/(r32)m;
-      
+
       // TODO: make trig ops fast
       c64 wm = C64Polar(1.f, angle);
       // TODO: maybe do these multiplies wide as well?
@@ -844,92 +902,92 @@ static REAL_IFFT_FUNCTION(ifft_real_noPermute)
       WideFloat wmQuIm = wideSetConstantFloats(wmQu.im);
 
       for(u32 k = 0; k < length; k += m)
-	{	  
-	  WideFloat wRe = wideSetFloats(1.f, wm.re, wmSq.re, wmCu.re);
-	  WideFloat wIm = wideSetFloats(0.f, wm.im, wmSq.im, wmCu.im);
-	  	      
-	  r32 *dest0Re = dest + k;
-	  r32 *dest0Im = destImTemp + k;
-	  r32 *dest1Re = dest + k + m/2;
-	  r32 *dest1Im = destImTemp + k + m/2;
-	  for(u32 j = 0; j < m/2; j += simdWidth)
-	    {
-	      /* WideFloat storeMask = wideSetConstantFloats(0.f); */
-	      /* WideFloat storeMaskInv = wideSetConstantFloats(0.f); */
-	      /* for(u32 lane = 0; lane < simdWidth; ++lane) */
-	      /* 	{ */
-	      /* 	  r32 val = (j + lane < m/2) ? maskF : 0; */
-	      /* 	  r32 valInv = (j + lane < m/2) ? 0 : maskF; */
-		  
-	      /* 	  wideSetLaneFloats(&storeMask, val, lane); */
-	      /* 	  wideSetLaneFloats(&storeMaskInv, valInv, lane); */
-	      /* 	} */
+        {
+          WideFloat wRe = wideSetFloats(1.f, wm.re, wmSq.re, wmCu.re);
+          WideFloat wIm = wideSetFloats(0.f, wm.im, wmSq.im, wmCu.im);
 
-	      // NOTE: loads
-	      WideFloat in0Re = wideLoadFloats(dest0Re);
-	      WideFloat in0Im = wideLoadFloats(dest0Im);
-	      WideFloat in1Re = wideLoadFloats(dest1Re);
-	      WideFloat in1Im = wideLoadFloats(dest1Im);
+          r32 *dest0Re = dest + k;
+          r32 *dest0Im = destImTemp + k;
+          r32 *dest1Re = dest + k + m/2;
+          r32 *dest1Im = destImTemp + k + m/2;
+          for(u32 j = 0; j < m/2; j += simdWidth)
+            {
+              /* WideFloat storeMask = wideSetConstantFloats(0.f); */
+              /* WideFloat storeMaskInv = wideSetConstantFloats(0.f); */
+              /* for(u32 lane = 0; lane < simdWidth; ++lane) */
+              /*        { */
+              /*          r32 val = (j + lane < m/2) ? maskF : 0; */
+              /*          r32 valInv = (j + lane < m/2) ? 0 : maskF; */
 
-	      // NOTE: butterflies and twiddles
-	      WideFloat productRe = wideSubFloats(wideMulFloats(wRe, in1Re),
-						  wideMulFloats(wIm, in1Im));
-	      WideFloat productIm = wideAddFloats(wideMulFloats(wRe, in1Im),
-						  wideMulFloats(wIm, in1Re));
-	      WideFloat out0Re = wideAddFloats(in0Re, productRe);
-	      WideFloat out0Im = wideAddFloats(in0Im, productIm);
-	      WideFloat out1Re = wideSubFloats(in0Re, productRe);
-	      WideFloat out1Im = wideSubFloats(in0Im, productIm);
+              /*          wideSetLaneFloats(&storeMask, val, lane); */
+              /*          wideSetLaneFloats(&storeMaskInv, valInv, lane); */
+              /*        } */
 
-	      // NOTE: mask out what not to store
-	      /* WideFloat store0Re = wideAddFloats(wideMaskFloats(out0Re, storeMask), */
-	      /* 					 wideMaskFloats(in0Re, storeMaskInv)); */
-	      /* WideFloat store0Im = wideAddFloats(wideMaskFloats(out0Im, storeMask), */
-	      /* 					 wideMaskFloats(in0Im, storeMaskInv)); */
-	      /* WideFloat store1Re = wideAddFloats(wideMaskFloats(out1Re, storeMask), */
-	      /* 					 wideMaskFloats(in1Re, storeMaskInv)); */
-	      /* WideFloat store1Im = wideAddFloats(wideMaskFloats(out1Im, storeMask), */
-	      /* 					 wideMaskFloats(in1Im, storeMaskInv)); */
+              // NOTE: loads
+              WideFloat in0Re = wideLoadFloats(dest0Re);
+              WideFloat in0Im = wideLoadFloats(dest0Im);
+              WideFloat in1Re = wideLoadFloats(dest1Re);
+              WideFloat in1Im = wideLoadFloats(dest1Im);
 
-	      // NOTE: do the store
-	      /* wideStoreFloats(dest0Re, store0Re); */
-	      /* wideStoreFloats(dest0Im, store0Im); */
-	      /* wideStoreFloats(dest1Re, store1Re); */
-	      /* wideStoreFloats(dest1Im, store1Im); */
-	      wideStoreFloats(dest0Re, out0Re);
-	      wideStoreFloats(dest0Im, out0Im);
-	      wideStoreFloats(dest1Re, out1Re);
-	      wideStoreFloats(dest1Im, out1Im);
+              // NOTE: butterflies and twiddles
+              WideFloat productRe = wideSubFloats(wideMulFloats(wRe, in1Re),
+                                                  wideMulFloats(wIm, in1Im));
+              WideFloat productIm = wideAddFloats(wideMulFloats(wRe, in1Im),
+                                                  wideMulFloats(wIm, in1Re));
+              WideFloat out0Re = wideAddFloats(in0Re, productRe);
+              WideFloat out0Im = wideAddFloats(in0Im, productIm);
+              WideFloat out1Re = wideSubFloats(in0Re, productRe);
+              WideFloat out1Im = wideSubFloats(in0Im, productIm);
+
+              // NOTE: mask out what not to store
+              /* WideFloat store0Re = wideAddFloats(wideMaskFloats(out0Re, storeMask), */
+              /*                                         wideMaskFloats(in0Re, storeMaskInv)); */
+              /* WideFloat store0Im = wideAddFloats(wideMaskFloats(out0Im, storeMask), */
+              /*                                         wideMaskFloats(in0Im, storeMaskInv)); */
+              /* WideFloat store1Re = wideAddFloats(wideMaskFloats(out1Re, storeMask), */
+              /*                                         wideMaskFloats(in1Re, storeMaskInv)); */
+              /* WideFloat store1Im = wideAddFloats(wideMaskFloats(out1Im, storeMask), */
+              /*                                         wideMaskFloats(in1Im, storeMaskInv)); */
+
+              // NOTE: do the store
+              /* wideStoreFloats(dest0Re, store0Re); */
+              /* wideStoreFloats(dest0Im, store0Im); */
+              /* wideStoreFloats(dest1Re, store1Re); */
+              /* wideStoreFloats(dest1Im, store1Im); */
+              wideStoreFloats(dest0Re, out0Re);
+              wideStoreFloats(dest0Im, out0Im);
+              wideStoreFloats(dest1Re, out1Re);
+              wideStoreFloats(dest1Im, out1Im);
 
 
-	      WideFloat wReOld = wRe;
-	      WideFloat wImOld = wIm;
-	      wRe = wideSubFloats(wideMulFloats(wReOld, wmQuRe),
-				  wideMulFloats(wImOld, wmQuIm));
-	      wIm = wideAddFloats(wideMulFloats(wReOld, wmQuIm),
-				  wideMulFloats(wImOld, wmQuRe));
+              WideFloat wReOld = wRe;
+              WideFloat wImOld = wIm;
+              wRe = wideSubFloats(wideMulFloats(wReOld, wmQuRe),
+                                  wideMulFloats(wImOld, wmQuIm));
+              wIm = wideAddFloats(wideMulFloats(wReOld, wmQuIm),
+                                  wideMulFloats(wImOld, wmQuRe));
 
-	      dest0Re += simdWidth;
-	      dest0Im += simdWidth;
-	      dest1Re += simdWidth;
-	      dest1Im += simdWidth;
-	    }
-	}
+              dest0Re += simdWidth;
+              dest0Im += simdWidth;
+              dest1Re += simdWidth;
+              dest1Im += simdWidth;
+            }
+        }
     }
 }
 
 static void
 convolve(r32 *dest, r32 *src0, r32 *src1, u32 length, Arena *tempAllocator)
 {
-  // NOTE: fast convolution with ffts  
+  // NOTE: fast convolution with ffts
   ASSERT(isPowerOf2(length));
   u32 simdWidth = 4;
-  
+
   r32 *temp0Re = arenaPushArray(tempAllocator, length, r32, arenaFlagsZeroAlign(simdWidth));
   r32 *temp0Im = arenaPushArray(tempAllocator, length, r32, arenaFlagsZeroAlign(simdWidth));
   r32 *temp1Re = arenaPushArray(tempAllocator, length, r32, arenaFlagsZeroAlign(simdWidth));
   r32 *temp1Im = arenaPushArray(tempAllocator, length, r32, arenaFlagsZeroAlign(simdWidth));
-  
+
   fft_real_noPermute(temp0Re, temp0Im, src0, length);
   fft_real_noPermute(temp1Re, temp1Im, src1, length);
 
@@ -949,13 +1007,13 @@ convolve(r32 *dest, r32 *src0, r32 *src1, u32 length, Arena *tempAllocator)
 
       WideFloat outRe = wideSubFloats(wideMulFloats(in0Re, in1Re), wideMulFloats(in0Im, in1Re));
       WideFloat outIm = wideAddFloats(wideMulFloats(in0Re, in1Im), wideMulFloats(in0Im, in1Re));
-      
+
       wideStoreFloats(tempDestRe, outRe);
       wideStoreFloats(tempDestIm, outIm);
 
       tempDestRe += simdWidth;
       tempDestIm += simdWidth;
-      
+
       tempSrc0Re += simdWidth;
       tempSrc0Im += simdWidth;
       tempSrc1Re += simdWidth;
@@ -980,21 +1038,21 @@ fft(c64 *destBuffer, r32 *sourceBuffer, u32 lengthInit, u32 stride = 1)
       fft(destBuffer + length/2, sourceBuffer + stride, length/2, 2*stride);
 
       for(u32 k = 0; k < length/2; ++k)
-	{
-	  c64 w = C64Polar(1, -GS_TAU*k/(r32)length);
-	  c64 in0 = destBuffer[k];
-	  c64 in1 = destBuffer[k + length/2];
+        {
+          c64 w = C64Polar(1, -GS_TAU*k/(r32)length);
+          c64 in0 = destBuffer[k];
+          c64 in1 = destBuffer[k + length/2];
 
-	  destBuffer[k] = in0 + w*in1;
-	  destBuffer[k + length/2] = in0 - w*in1;
-	}
+          destBuffer[k] = in0 + w*in1;
+          destBuffer[k + length/2] = in0 - w*in1;
+        }
     }
-#else 
+#else
   // NOTE: iterative radix-2 DIT fft
   // TODO: radix-4
   u32 length = ROUND_UP_TO_POWER_OF_2(lengthInit);
   u32 lengthSizeInBits = 8*sizeof(length);
-  u32 logLength = log2(length);  
+  u32 logLength = log2(length);
 
   // NOTE: bit-reverse copy
   // TODO: optimize
@@ -1003,9 +1061,9 @@ fft(c64 *destBuffer, r32 *sourceBuffer, u32 lengthInit, u32 stride = 1)
       u32 reversedIndex = reverseBits(index);
       reversedIndex >>= lengthSizeInBits - logLength;
       ASSERT(reversedIndex < length);
-      
+
       destBuffer[index].re = sourceBuffer[reversedIndex];
-    }  
+    }
 
   // NOTE: twiddles
   for(u32 level = 1; level <= logLength; ++level)
@@ -1013,27 +1071,27 @@ fft(c64 *destBuffer, r32 *sourceBuffer, u32 lengthInit, u32 stride = 1)
       u32 m = (1 << level);
       r32 angle = -GS_TAU/(r32)m;
       c64 wm = C64Polar(1, angle);
-      
+
       for(u32 k = 0; k < length; k += m)
-	{
-	  c64 w = C64(1, 0);
-	  
-	  c64 *dest0 = destBuffer + k;
-	  c64 *dest1 = destBuffer + k + m/2;	  
-	  for(u32 j = 0; j < m/2; ++j)
-	    {
-	      c64 in0 = *dest0;
-	      c64 in1 = *dest1;     
+        {
+          c64 w = C64(1, 0);
 
-	      // TODO: optimize this math:
-	      //       use SIMD intrinsics, and take advantage of the fact that the input data is real
-	      *dest0++ = in0 + w*in1;
-	      *dest1++ = in0 - w*in1;
+          c64 *dest0 = destBuffer + k;
+          c64 *dest1 = destBuffer + k + m/2;
+          for(u32 j = 0; j < m/2; ++j)
+            {
+              c64 in0 = *dest0;
+              c64 in1 = *dest1;
 
-	      w *= wm;
-	    }
-	}
-    }  
+              // TODO: optimize this math:
+              //       use SIMD intrinsics, and take advantage of the fact that the input data is real
+              *dest0++ = in0 + w*in1;
+              *dest1++ = in0 - w*in1;
+
+              w *= wm;
+            }
+        }
+    }
 #endif
 }
 
@@ -1051,14 +1109,14 @@ ifft(r32 *destBuffer, r32 *destImScratch, c64 *sourceBuffer, u32 lengthInit, u32
       ifft(destBuffer + length/2, sourceBuffer + stride, length/2, 2*stride);
 
       for(u32 k = 0; k < length/2; ++k)
-	{
-	  c64 w = C64Polar(1, GS_TAU*k/(r32)length);
-	  c64 in0 = destBuffer[k];
-	  c64 in1 = destBuffer[k + length/2];
+        {
+          c64 w = C64Polar(1, GS_TAU*k/(r32)length);
+          c64 in0 = destBuffer[k];
+          c64 in1 = destBuffer[k + length/2];
 
-	  destBuffer[k] = in0 + w*in1;
-	  destBuffer[k + length/2] = in0 - w*in1;
-	}
+          destBuffer[k] = in0 + w*in1;
+          destBuffer[k + length/2] = in0 - w*in1;
+        }
     }
 #else
   // TODO: optimize
@@ -1088,29 +1146,29 @@ ifft(r32 *destBuffer, r32 *destImScratch, c64 *sourceBuffer, u32 lengthInit, u32
       c64 wm = C64Polar(1, angle);
 
       for(u32 k = 0; k < length; k += m)
-	{
-	  c64 w = C64(1, 0);
-	  
-	  r32 *dest0 = destBuffer + k;
-	  r32 *dest0Im = destImScratch + k;
-	  r32 *dest1 = destBuffer + k + m/2;
-	  r32 *dest1Im = destImScratch + k + m/2;
-	  for(u32 j = 0; j < m/2; ++j)
-	    {
-	      c64 in0 = C64(*dest0, *dest0Im);
-	      c64 in1 = C64(*dest1, *dest1Im);
+        {
+          c64 w = C64(1, 0);
 
-	      c64 result0 = in0 + w*in1;
-	      c64 result1 = in0 - w*in1;
-	      
-	      *dest0++ = result0.re;
-	      *dest1++ = result1.re;
-	      *dest0Im++ = result0.im;
-	      *dest1Im++ = result1.im;
+          r32 *dest0 = destBuffer + k;
+          r32 *dest0Im = destImScratch + k;
+          r32 *dest1 = destBuffer + k + m/2;
+          r32 *dest1Im = destImScratch + k + m/2;
+          for(u32 j = 0; j < m/2; ++j)
+            {
+              c64 in0 = C64(*dest0, *dest0Im);
+              c64 in1 = C64(*dest1, *dest1Im);
 
-	      w *= wm;
-	    }
-	}
+              c64 result0 = in0 + w*in1;
+              c64 result1 = in0 - w*in1;
+
+              *dest0++ = result0.re;
+              *dest1++ = result1.re;
+              *dest0Im++ = result0.im;
+              *dest1Im++ = result1.im;
+
+              w *= wm;
+            }
+        }
     }
 #endif
 }
@@ -1121,7 +1179,7 @@ fft(c64 *output, c64 *input, u32 lengthInit)
   u32 length = ROUND_UP_TO_POWER_OF_2(lengthInit);
   u32 lengthSizeInBits = 8*sizeof(lengthInit);
   u32 logLength = log2(length);
-  
+
   for(u32 index = 0; index < length; ++index)
     {
       u32 reverseIndex = reverseBits(index);
@@ -1136,23 +1194,23 @@ fft(c64 *output, c64 *input, u32 lengthInit)
       c64 wm = C64Polar(1, angle);
 
       for(u32 k = 0; k < length; k += m)
-	{
-	  c64 w = C64(1, 0);
-	  
-	  c64 *dest0 = output + k;
-	  c64 *dest1 = output + k + m/2;	  
-	  for(u32 j = 0; j < m/2; ++j)
-	    {
-	      c64 in0 = *dest0;
-	      c64 in1 = *dest1;     
+        {
+          c64 w = C64(1, 0);
 
-	      // TODO: SIMD	 
-	      *dest0++ = in0 + w*in1;
-	      *dest1++ = in0 - w*in1;
+          c64 *dest0 = output + k;
+          c64 *dest1 = output + k + m/2;
+          for(u32 j = 0; j < m/2; ++j)
+            {
+              c64 in0 = *dest0;
+              c64 in1 = *dest1;
 
-	      w *= wm;
-	    }
-	}
+              // TODO: SIMD
+              *dest0++ = in0 + w*in1;
+              *dest1++ = in0 - w*in1;
+
+              w *= wm;
+            }
+        }
     }
 }
 
@@ -1163,7 +1221,7 @@ ifft(c64 *output, c64 *input, u32 lengthInit)
   u32 lengthSizeInBits = 8*sizeof(lengthInit);
   u32 logLength = log2(length);
   r32 invLength = 1.f/(r32)length;
-  
+
   for(u32 index = 0; index < length; ++index)
     {
       u32 reverseIndex = reverseBits(index);
@@ -1178,23 +1236,23 @@ ifft(c64 *output, c64 *input, u32 lengthInit)
       c64 wm = C64Polar(1, angle);
 
       for(u32 k = 0; k < length; k += m)
-	{
-	  c64 w = C64(1, 0);
-	  
-	  c64 *dest0 = output + k;
-	  c64 *dest1 = output + k + m/2;	  
-	  for(u32 j = 0; j < m/2; ++j)
-	    {
-	      c64 in0 = *dest0;
-	      c64 in1 = *dest1;     
+        {
+          c64 w = C64(1, 0);
 
-	      // TODO: SIMD	 
-	      *dest0++ = in0 + w*in1;
-	      *dest1++ = in0 - w*in1;
+          c64 *dest0 = output + k;
+          c64 *dest1 = output + k + m/2;
+          for(u32 j = 0; j < m/2; ++j)
+            {
+              c64 in0 = *dest0;
+              c64 in1 = *dest1;
 
-	      w *= wm;
-	    }
-	}
+              // TODO: SIMD
+              *dest0++ = in0 + w*in1;
+              *dest1++ = in0 - w*in1;
+
+              w *= wm;
+            }
+        }
     }
 }
 
@@ -1203,12 +1261,12 @@ czt(c64 *output, r32 *input, u32 length, Arena *scratchAllocator)
 {
   // NOTE: chirp z transform.
   //       for taking ffts of arbitrary length signals
-  
+
   u32 chirpLength = 2*length - 1;
   u32 fftLength = ROUND_UP_TO_POWER_OF_2(chirpLength);
 
   r32 angle = -GS_PI/(r32)length;
-  c64 wBase = C64Polar(1, angle);  
+  c64 wBase = C64Polar(1, angle);
   c64 *chirp = arenaPushArray(scratchAllocator, chirpLength, c64);//, arenaFlagsZeroNoAlign());
   c64 *reciprocalChirp = arenaPushArray(scratchAllocator, fftLength, c64);//, arenaFlagsZeroNoAlign());
   c64 *scaledInput = arenaPushArray(scratchAllocator, fftLength, c64);//, arenaFlagsZeroNoAlign());
@@ -1229,9 +1287,9 @@ czt(c64 *output, r32 *input, u32 length, Arena *scratchAllocator)
       scaledInput[k] = input[k] * chirp[length + k - 1 ];
 
       // TODO: don't compute more of these values than necessary. may be a source of significant numerical error
-      //if(k*k >= 2*length) 
+      //if(k*k >= 2*length)
       wTemp[k] = wTemp[k - 1] * wBase * wBase;
-    } 
+    }
 
   // NOTE: convolve the scaled input with the reciprocal chirp
   // TODO: these fft calls are not optimized for doing convolutions:
@@ -1242,7 +1300,7 @@ czt(c64 *output, r32 *input, u32 length, Arena *scratchAllocator)
 
   c64 *fftReciprocalChirp = scaledInput;
   fft(fftReciprocalChirp, reciprocalChirp, fftLength);
-  
+
   for(u32 index = 0; index < fftLength; ++index)
     {
       fftScaledInput[index] *= fftReciprocalChirp[index];
@@ -1266,7 +1324,7 @@ iczt(r32 *outputReal, r32 *outputImag, c64 *input, u32 length, Arena *scratchAll
   u32 fftLength = ROUND_UP_TO_POWER_OF_2(chirpLength);
 
   r32 angle = GS_PI/(r32)length;
-  c64 wBase = C64Polar(1, angle);  
+  c64 wBase = C64Polar(1, angle);
   c64 *chirp = arenaPushArray(scratchAllocator, chirpLength, c64);//, arenaFlagsZeroNoAlign());
   c64 *reciprocalChirp = arenaPushArray(scratchAllocator, fftLength, c64);//, arenaFlagsZeroNoAlign());
   c64 *scaledInput = arenaPushArray(scratchAllocator, fftLength, c64);//, arenaFlagsZeroNoAlign());
@@ -1276,7 +1334,7 @@ iczt(r32 *outputReal, r32 *outputImag, c64 *input, u32 length, Arena *scratchAll
   wTemp[0] = C64(1, 0);
   scaledInput[0] = input[0]*chirp[length];
   for(u32 k = 1; k < length; ++k)
-    {      
+    {
       c64 chirpVal = chirp[length - 1 + k - 1] * wTemp[k - 1] * wBase;
       c64 conjChirpVal = conjugateC64(chirpVal);
       chirp[length - 1 + k] = chirpVal;
@@ -1284,16 +1342,16 @@ iczt(r32 *outputReal, r32 *outputImag, c64 *input, u32 length, Arena *scratchAll
       reciprocalChirp[length - 1 + k] = conjChirpVal;
       reciprocalChirp[length - 1 - k] = conjChirpVal;
       scaledInput[k] = input[k] * chirp[length + k - 1 ];
-      
+
       wTemp[k] = wTemp[k - 1] * wBase * wBase;
-    } 
+    }
 
   c64 *fftScaledInput = wTemp;
   fft(fftScaledInput, scaledInput, fftLength);
 
   c64 *fftReciprocalChirp = scaledInput;
   fft(fftReciprocalChirp, reciprocalChirp, fftLength);
-  
+
   for(u32 index = 0; index < fftLength; ++index)
     {
       fftScaledInput[index] *= fftReciprocalChirp[index];
