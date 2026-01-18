@@ -10,3 +10,19 @@ struct BufferStream
 
   BufferStreamRefill *refill;
 };
+
+struct AudioBufferStream;
+#define AUDIO_BUFFER_STREAM_REFILL_PROC(name) void (name) (AudioBufferStream *stream)
+typedef AUDIO_BUFFER_STREAM_REFILL_PROC(AudioBufferStreamRefill);
+
+#define MAX_CHANNEL_COUNT 8
+struct AudioBufferStream
+{
+  r32 *channels[MAX_CHANNEL_COUNT];
+
+  u32 channelCount;
+  u32 frameCount;
+  u32 at;
+
+  AudioBufferStreamRefill *refill;
+};

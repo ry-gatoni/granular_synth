@@ -1641,6 +1641,8 @@ gsRenderNewFrame(PluginMemory *memory, PluginInput *input, RenderCommands *rende
 
 /* STREAM TOPOLOGY
  *
+ * CURRENT
+ *
  * input     stream +
  *                  |\
  * pv input  stream + |
@@ -1651,6 +1653,24 @@ gsRenderNewFrame(PluginMemory *memory, PluginInput *input, RenderCommands *rende
  *                  |/
  * output    stream +
  *
+ * TARGET
+ *
+ * input  stream + <- reads from backend (and wav file in debug mode), writes to input ring buffer
+ *               |\
+ * pv     stream + | <- reads from input ring buffer, writes to grain ring buffer
+ *               |/
+ * output stream + <- reads from input ring buffer and grain ring buffer, writes to backend
+ *
+ * NOTES
+ * - each node in the graph maintains a source of samples
+ * - on refill, a node provides a view into its source of all the samples
+ *   available for reading
+ * - when refill is called and a node has no available samples in its source,
+ *   it calls refill on its predecessors
+ * - the source state and readable view state are independent; readers may
+ *   increment the view position by more or less samples than they have read,
+ *   or request more samples before they have read all the samples from the
+ *   previous request without modifying the underlying sample source.
  */
 
 struct PVStream
@@ -1658,7 +1678,8 @@ struct PVStream
   BufferStream stream; // NOTE: must be the first member for casting reasons
   BufferStream *source;
   Arena *refillArena;
-  u64 windowSampleCount;
+  u32 windowSampleCount;
+  u32 analysisHopSize;
 };
 
 // TODO: is using `SamplePair` actually better if we end up needing to vectorize each channel?
@@ -1667,11 +1688,17 @@ static void
 pvProcess(BufferStream *stream)
 {
   PVStream *pvStream = (PVStream*)stream;
+
   Arena *refillArena = pvStream->refillArena;
-  u64 windowSampleCount = pvStream->windowSampleCount;
+  u32 windowSampleCount = pvStream->windowSampleCount;
+  u32 analysisHopSize = pvStream->analysisHopSize;
+
   BufferStream *inStream = pvStream->source;
-  if(inStream->at == inStream->end) inStream->refill(inStream);
-  ASSERT(inStream->at == inStream->start);
+  {
+    u64 availableSamples = INT_FROM_PTR((SamplePair*)inStream->end - (SamplePair*)inStream->at);
+    if(availableSamples < windowSampleCount) inStream->refill(inStream); // TODO: how to handle unread samples?
+    ASSERT(inStream->at == inStream->start);
+  }
 
   SamplePair *inputSamples = (SamplePair*)inStream->at;
   inStream->at += analysisHopSize*sizeof(*inputSamples);
@@ -1679,12 +1706,7 @@ pvProcess(BufferStream *stream)
   // TODO: window frame
   r32 *fftInSamplesL = arenaPushArray(refillArena, 2*windowSampleCount, r32);
   r32 *fftInSamplesR = fftInSamplesL + windowSampleCount;
-  // TODO: vectorize
-  for(u32 i = 0; i < windowSampleCount; ++i)
-  {
-    fftInSamplesL[i] = inputSamples[i].left;
-    fftInSamplesR[i] = inputSamples[i].right;
-  }
+  wideDeinterleave(fftInSamplesL, fftInSamplesR, inputSamples, windowSampleCount);
   FloatBuffer fftInL = makeFloatBuffer(fftInSamplesL, windowSampleCount);
   FloatBuffer fftInR = makeFloatBuffer(fftInSamplesR, windowSampleCount);
 
@@ -1695,12 +1717,7 @@ pvProcess(BufferStream *stream)
   FloatBuffer ifftOutputR = ifft(refillArena, inputSpectrumR);
 
   SamplePair *outputSamples = arenaPushArray(refillArena, windowSampleCount, SamplePair);
-  // TODO: vectorize
-  for(u32 i = 0; i < windowSampleCount; ++i)
-  {
-    outputSamples[i].left  = ifftOutputL.vals[i];
-    outputSamples[i].right = ifftOutputR.vals[i];
-  }
+  wideInterleave(outputSamples, ifftOutputL.vals, ifftOutputR.vals, windowSampleCount);
 
   stream->at = (u8*)outputSamples;
   stream->start = stream->at;
@@ -1712,7 +1729,8 @@ struct PVOutputStream
   BufferStream stream; // NOTE: must be the first member for casting reasons
   BufferStream *source;
   Arena *refillArena;
-  AudioRingBuffer *internalRingBuffer;
+  AudioRingBuffer *destBuffer;
+  u32 synthesisHopSize;
 };
 
 static void
@@ -1720,8 +1738,11 @@ pvOutput(BufferStream *stream)
 {
   ASSERT(stream->at == stream->end);
   PVOutputStream *pvStream = (PVOutputStream*)stream;
+
   Arena *refillArena = pvStream->refillArena;
-  AudioRingBuffer *rb = pvStream->internalRingBuffer;
+  AudioRingBuffer *rb = pvStream->destBuffer;
+  u32 synthesisHopSize = pvStream->synthesisHopSize;
+
   BufferStream *pvSource = pvStream->source;
   if(pvSource->at == pvSource->end) pvSource->refill(pvSource);
   ASSERT(pvSource->at == pvSource->start);
@@ -1737,7 +1758,7 @@ pvOutput(BufferStream *stream)
       rb->samples[writeIndex].left  += pvFrameSamples[i].left;
       rb->samples[writeIndex].right += pvFrameSamples[i].right;
     }
-    rb->writeIndex += synthesizeHopSize;
+    rb->writeIndex += synthesisHopSize;
     //rb->writeIndex &= rb->sampleCount - 1;
     pvSource->at += samplesToProcess*sizeof(*pvFrameSamples);
   }

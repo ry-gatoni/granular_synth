@@ -7,20 +7,23 @@ static WideFloat wideLoadFloats(r32 *src);
 static WideFloat wideSetConstantFloats(r32 src);
 static WideFloat wideSetFloats(r32 a, r32 b, r32 c, r32 d);
 static void      wideSetLaneFloats(WideFloat *w, r32 val, u32 lane);
-static void	 wideStoreFloats(r32 *dest, WideFloat src);
+static void      wideStoreFloats(r32 *dest, WideFloat src);
 static WideFloat wideAddFloats(WideFloat a, WideFloat b);
 static WideFloat wideSubFloats(WideFloat a, WideFloat b);
 static WideFloat wideMulFloats(WideFloat a, WideFloat b);
 static WideFloat wideMaskFloats(WideFloat a, WideFloat b, WideInt mask);
 
-static WideInt	 wideLoadInts(u32 *src);
-static WideInt	 wideSetConstantInts(u32 src);
+static void wideInterleave(r32 *dest, r32 *srcL, r32 *srcR, u32 frameCount);
+static void wideDeinterleave(r32 *destL, r32 *destR, r32 *src, u32 frameCount);
+
+static WideInt   wideLoadInts(u32 *src);
+static WideInt   wideSetConstantInts(u32 src);
 static WideInt   wideSetInts(u32 a, u32 b, u32 c, u32 d);
 static void      wideSetLaneInts(WideInt *w, u32 val, u32 lane);
-static void	 wideStoreInts(u32 *dest, WideInt src);
-static WideInt	 wideAddInts(WideInt a, WideInt b);
-static WideInt	 wideSubInts(WideInt a, WideInt b);
-static WideInt	 wideMulInts(WideInt a, WideInt b);
+static void      wideStoreInts(u32 *dest, WideInt src);
+static WideInt   wideAddInts(WideInt a, WideInt b);
+static WideInt   wideSubInts(WideInt a, WideInt b);
+static WideInt   wideMulInts(WideInt a, WideInt b);
 static WideInt   wideAndInts(WideInt a, WideInt b);
 
 #if ARCH_X86 || ARCH_X64
@@ -142,7 +145,7 @@ wideAddFloats(WideFloat a, WideFloat b)
 {
   WideFloat result = {};
   result.val = _mm_add_ps(a.val, b.val);
-  
+
   return(result);
 }
 
@@ -151,7 +154,7 @@ wideAddInts(WideInt a, WideInt b)
 {
   WideInt result = {};
   result.val = _mm_add_epi32(a.val, b.val);
-  
+
   return(result);
 }
 
@@ -160,7 +163,7 @@ wideSubFloats(WideFloat a, WideFloat b)
 {
   WideFloat result = {};
   result.val = _mm_sub_ps(a.val, b.val);
-  
+
   return(result);
 }
 
@@ -169,7 +172,7 @@ wideSubInts(WideInt a, WideInt b)
 {
   WideInt result = {};
   result.val = _mm_sub_epi32(a.val, b.val);
-  
+
   return(result);
 }
 
@@ -178,7 +181,7 @@ wideMulFloats(WideFloat a, WideFloat b)
 {
   WideFloat result = {};
   result.val = _mm_mul_ps(a.val, b.val);
-  
+
   return(result);
 }
 
@@ -188,7 +191,7 @@ wideMaskFloats(WideFloat a, WideFloat b, WideInt mask)
   WideFloat result = {};
   __m128 maskF = _mm_castsi128_ps(mask.val);
   result.val = _mm_or_ps(_mm_and_ps(maskF, a.val),
-			 _mm_andnot_ps(maskF, b.val));
+                         _mm_andnot_ps(maskF, b.val));
 
   return(result);
 }
@@ -198,7 +201,7 @@ wideMulInts(WideInt a, WideInt b)
 {
   WideInt result = {};
   result.val = _mm_mul_epi32(a.val, b.val);
-  
+
   return(result);
 }
 
@@ -209,6 +212,46 @@ wideAndInts(WideInt a, WideInt b)
   result.val = _mm_and_si128(a.val, b.val);
 
   return(result);
+}
+
+static void
+wideInterleave(SamplePair *dest, r32 *srcL, r32 *srcR, u32 frameCount)
+{
+  ASSERT((frameCount & 3) == 0); // NOTE: check the number of frames is divisible by the SIMD width
+  for(u32 i = 0; i < frameCount; i += 4)
+  {
+    __m128 left  = _mm_loadu_ps(srcL);
+    __m128 right = _mm_loadu_ps(srcR);
+    srcL += 4;
+    srcR += 4;
+
+    __m128 interleavedLo = _mm_unpacklo_ps(left, right);
+    __m128 interleavedHi = _mm_unpackhi_ps(left, right);
+    _mm_storeu_ps((r32*)dest, interleavedLo);
+    dest += 2;
+    _mm_storeu_ps((r32*)dest, interleavedHi);
+    dest += 2;
+  }
+}
+
+static void
+wideDeinterleave(r32 *destL, r32 *destR, SamplePair *src, u32 frameCount)
+{
+  ASSERT((frameCount & 3) == 0); // NOTE: check the number of frames is divisible by the SIMD width
+  for(u32 i = 0; i < frameCount; i += 4)
+  {
+    __m128 interleaved0 = _mm_loadu_ps((r32*)src);
+    src += 2;
+    __m128 interleaved1 = _mm_loadu_ps((r32*)src);
+    src += 2;
+
+    __m128 left  = _mm_shuffle_ps(interleaved0, interleaved1, _MM_SHUFFLE(2, 0, 2, 0));
+    __m128 right = _mm_shuffle_ps(interleaved0, interleaved1, _MM_SHUFFLE(3, 1, 3, 1));
+    _mm_storeu_ps(destL, left);
+    _mm_storeu_ps(destR, right);
+    destL += 4;
+    destR += 4;
+  }
 }
 
 #elif ARCH_ARM || ARCH_ARM64
@@ -285,11 +328,11 @@ static void
 wideSetLaneFloats(WideFloat *w, r32 val, u32 lane)
 {
   float32x4_t temp = vdupq_n_f32(val);
-  
+
   u32 mask[4] = {};
   mask[lane] = U32_MAX;
   uint32x4_t maskVec = vld1q_u32(mask);
-    
+
   w->val = vbslq_f32(maskVec, temp, w->val);
 }
 
@@ -297,11 +340,11 @@ static void
 wideSetLaneInts(WideInt *w, u32 val, u32 lane)
 {
   uint32x4_t temp = vdupq_n_u32(val);
-  
+
   u32 mask[4] = {};
   mask[lane] = U32_MAX;
   uint32x4_t maskVec = vld1q_u32(mask);
-    
+
   w->val = vbslq_u32(maskVec, temp, w->val);
 }
 
@@ -478,7 +521,7 @@ wideMaskFloats(WideFloat a, WideFloat b, WideInt mask)
 {
   WideFloat result = {};
   result.val = wasm_v128_or(wasm_v128_and(a.val, mask.val),
-			    wasm_v128_andnot(b.val, mask.val));
+                            wasm_v128_andnot(b.val, mask.val));
   return(result);
 }
 
