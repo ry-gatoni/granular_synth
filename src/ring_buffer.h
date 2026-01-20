@@ -3,20 +3,45 @@
 struct AudioRingBuffer
 {
   SamplePair *samples;
+  /* r32 *samples[2]; */
   u64 sampleCount;
   u64 writeIndex;
   u64 readIndex;
+  b32 isMagic;
 };
 
-static inline AudioRingBuffer*
-rbAlloc(Arena *arena, u64 sampleCount)
+static b32
+rbInit(AudioRingBuffer *rb, u64 sampleCount, b32 isMagic)
 {
-  AudioRingBuffer *result = arenaPushStruct(arena, AudioRingBuffer);
-  result->sampleCount = ROUND_UP_POW_2(sampleCount);
-  result->samples = arenaPushArray(arena, result->sampleCount, SamplePair);
-  result->writeIndex = 0;
-  result->readIndex = 0;
-  return(result);
+  /* void *lSampleMemory = 0; */
+  /* void *rSampleMemory = 0; */
+  void *sampleMemory = 0;
+
+  sampleCount = ROUND_UP_POW_2(sampleCount);
+  // usz bufferSizeInBytes = sampleCount*sizeof(r32);
+  usz bufferSizeInBytes = sampleCount*sizeof(SamplePair);
+  /* lSampleMemory = gsAllocateRingBufferMemory(&bufferSizeInBytes); */
+  /* rSampleMemory = gsAllocateRingBufferMemory(&bufferSizeInBytes); */
+  sampleMemory = gsAllocateRingBufferMemory(&bufferSizeInBytes);
+  /* if(lSampleMemory == 0 || rSampleMemory == 0) */
+  if(sampleMemory == 0)
+  {
+    logString("rbInit: ring buffer memory allocation failure\n");
+    /* if(lSampleMemory != 0) gsFreeRingBufferMemory(lSampleMemory, bufferSizeInBytes); */
+    /* if(rSampleMemory != 0) gsFreeRingBufferMemory(rSampleMemory, bufferSizeInBytes); */
+    ZERO_STRUCT(rb);
+    return(0);
+  }
+
+  /* rb->sampleCount = bufferSizeInBytes/sizeof(r32); */
+  rb->sampleCount = bufferSizeInBytes/sizeof(SamplePair);
+  /* rb->samples[0] = (r32*)lSampleMemory; */
+  /* rb->samples[1] = (r32*)rSampleMemory; */
+  rb->samples = (SamplePair*)sampleMemory;
+  rb->writeIndex = 0;
+  rb->readIndex = 0;
+  rb->isMagic = isMagic;
+  return(1);
 }
 
 static inline u64

@@ -361,6 +361,9 @@ struct PluginState
   InputMixStream inputStream;
   BufferStream inputStreamClone;
 
+  AudioRingBuffer inputBuffer;
+  AudioRingBuffer grainBuffer;
+
   GrainManager grainManager;
   GrainStateView grainStateView;
 

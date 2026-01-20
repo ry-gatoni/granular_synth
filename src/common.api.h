@@ -17,6 +17,8 @@
   X(FreeMemory, void, (void *memory, usz size))\
   X(CopyMemory, void, (void *dest, void *src, usz size))\
   X(SetMemory, void, (void *dest, int value, usz size))\
+  X(AllocateRingBufferMemory, void*, (usz *sizeIO))\
+  X(FreeRingBufferMemory, void, (void *memory, usz size))\
   X(ArenaAcquire, Arena*, (usz size))\
   X(ArenaDiscard, void, (Arena *arena))\
   X(AtomicLoad, u32, (volatile u32 *src))\

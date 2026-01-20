@@ -6,7 +6,7 @@ typedef BASE_THREAD_PROC(BaseThreadProc);
 
 static void
 baseThreadEntry(BaseThreadProc *func, void *data)
-{  
+{
   func(data);
 }
 
@@ -14,7 +14,7 @@ struct OSThread
 {
   void *handle;
   void *id;
-  
+
   BaseThreadProc *func;
   void *data;
 
@@ -36,10 +36,10 @@ static void *atomicCompareAndSwapPointers(volatile void *value, void *oldval, vo
 
 #include <windows.h>
 
-#define FORMAT_ERROR_AS_STRING(code, string)				\
+#define FORMAT_ERROR_AS_STRING(code, string)                            \
   FormatMessageA(FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM, \
-		 NULL, (code), MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT), \
-		 (LPSTR)&(string), 0, NULL)
+                 NULL, (code), MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT), \
+                 (LPSTR)&(string), 0, NULL)
 
 inline u64
 u64FromFILETIME(FILETIME filetime)
@@ -81,7 +81,7 @@ inline FILETIME
 getLastWriteTime(char *filename)
 {
   FILETIME result = {};
-  
+
   WIN32_FIND_DATA findData;
   HANDLE findHandle = FindFirstFileA(filename, &findData);
   if(findHandle != INVALID_HANDLE_VALUE)
@@ -109,7 +109,7 @@ msecWait(u32 msecsToWait)
 }
 
 //
-// thread 
+// thread
 //
 
 static DWORD WINAPI
@@ -117,7 +117,7 @@ win32ThreadEntry(void *data)
 {
   OSThread *thread = (OSThread *)data;
   baseThreadEntry(thread->func, thread->data);
-  
+
   return(0);
 }
 
@@ -144,12 +144,12 @@ threadCreate(OSThread *thread, BaseThreadProc *func, void *threadData)
   else
     {
       thread->id = (void *)(uintptr_t)id;
-    } 
+    }
 }
 #if 0
 static void
 threadStart(OSThread thread)
-{  
+{
   if(ResumeThread(thread.handle) == (DWORD)-1)
     {
       DWORD errorCode = GetLastError();
@@ -176,18 +176,18 @@ threadDestroy(OSThread *thread)
   for(;;)
     {
       while(atomicCompareAndSwap(&thread->lock, 0, 1) != 0)
-	{
-	  msecWait(1);
-	}
+        {
+          msecWait(1);
+        }
       if(thread->finished == 1)
-	{
-	  return;
-	}
+        {
+          return;
+        }
       else
-	{
-	  atomicStore(&thread->lock, 0);
-	  msecWait(1);
-	}
+        {
+          atomicStore(&thread->lock, 0);
+          msecWait(1);
+        }
     }
 }
 
@@ -216,7 +216,7 @@ static u32
 atomicLoad(volatile u32 *src)
 {
   u32 result = InterlockedExchangeAdd(src, 0);
-  
+
   return(result);
 }
 
@@ -232,7 +232,7 @@ atomicLoadPointer(volatile void **src)
 
 static u32
 atomicStore(volatile u32 *dest, u32 value)
-{ 
+{
   u32 result = InterlockedExchange(dest, value);
 
   return(result);
@@ -277,7 +277,7 @@ static PluginCode
 loadPluginCode(char *filename)
 {
   PluginCode result = {};
-  
+
   FILETIME filetime = getLastWriteTime(filename);
   result.lastWriteTime = u64FromFILETIME(filetime);
   if(result.lastWriteTime)
@@ -291,31 +291,31 @@ loadPluginCode(char *filename)
       CopyFile(filename, tempFilename, FALSE);
       result.pluginCode = LoadLibraryA(tempFilename);
       if(result.pluginCode)
-	{
-	  result.pluginAPI.gsRenderNewFrame =
-	    (GS_RenderNewFrame *)GetProcAddress(result.pluginCode, "gsRenderNewFrame");
-	  result.pluginAPI.gsAudioProcess =
-	    (GS_AudioProcess *)GetProcAddress(result.pluginCode, "gsAudioProcess");
-	  result.pluginAPI.gsInitializePluginState =
-	    (GS_InitializePluginState *)GetProcAddress(result.pluginCode, "gsInitializePluginState");
-	  result.isValid = (result.pluginAPI.gsRenderNewFrame &&
-			    result.pluginAPI.gsAudioProcess &&
-			    result.pluginAPI.gsInitializePluginState);
-	}
+        {
+          result.pluginAPI.gsRenderNewFrame =
+            (GS_RenderNewFrame *)GetProcAddress(result.pluginCode, "gsRenderNewFrame");
+          result.pluginAPI.gsAudioProcess =
+            (GS_AudioProcess *)GetProcAddress(result.pluginCode, "gsAudioProcess");
+          result.pluginAPI.gsInitializePluginState =
+            (GS_InitializePluginState *)GetProcAddress(result.pluginCode, "gsInitializePluginState");
+          result.isValid = (result.pluginAPI.gsRenderNewFrame &&
+                            result.pluginAPI.gsAudioProcess &&
+                            result.pluginAPI.gsInitializePluginState);
+        }
       else
-	{
-	  DWORD errorCode = GetLastError();
-	  char *errorMessage;
-	  FORMAT_ERROR_AS_STRING(errorCode, errorMessage);
-	  fprintf(stderr, "failed to get plugin code: %s\n", errorMessage);
-	}
+        {
+          DWORD errorCode = GetLastError();
+          char *errorMessage;
+          FORMAT_ERROR_AS_STRING(errorCode, errorMessage);
+          fprintf(stderr, "failed to get plugin code: %s\n", errorMessage);
+        }
 
       if(!result.isValid)
-	{
-	  result.pluginAPI.gsRenderNewFrame = 0;
-	  result.pluginAPI.gsAudioProcess = 0;
-	  result.pluginAPI.gsInitializePluginState = 0;
-	}
+        {
+          result.pluginAPI.gsRenderNewFrame = 0;
+          result.pluginAPI.gsAudioProcess = 0;
+          result.pluginAPI.gsInitializePluginState = 0;
+        }
     }
 
   return(result);
@@ -344,55 +344,55 @@ static Buffer
 platformReadEntireFile(char *filename, Arena *allocator)
 {
   Buffer result = {};
-  
+
   HANDLE fileHandle = CreateFileA(filename, GENERIC_READ, FILE_SHARE_READ, 0,
-				  OPEN_EXISTING, 0, 0);
+                                  OPEN_EXISTING, 0, 0);
   if(fileHandle != INVALID_HANDLE_VALUE)
     {
       LARGE_INTEGER fileSize;
       if(GetFileSizeEx(fileHandle, &fileSize))
-	{
-	  s64 fileSizeInt = s64FromLARGE_INTEGER(fileSize);
-	  ASSERT(fileSizeInt > 0);
-	  result.size = fileSizeInt;
-	  result.contents = arenaPushSize(allocator, result.size + 1);
-	  
-	  u8 *dest = result.contents;
-	  usz totalBytesToRead = result.size;
-	  u32 bytesToRead = safeTruncateU64(totalBytesToRead);
-	  while(totalBytesToRead)
-	    {
-	      DWORD bytesRead;
-	      if(ReadFile(fileHandle, dest, bytesToRead, &bytesRead, 0))
-		{
-		  dest += bytesRead;
-		  totalBytesToRead -= bytesRead;
-		}
-	      else
-		{
-		  DWORD errorCode = GetLastError();
-		  char *errorMessage;
-		  FORMAT_ERROR_AS_STRING(errorCode, errorMessage);
-		  fprintf(stderr, "ERROR: ReadFile failed: %s\n", errorMessage);
-		  
-		  result.contents = 0;
-		  result.size = 0;
-		  break;
-		}
+        {
+          s64 fileSizeInt = s64FromLARGE_INTEGER(fileSize);
+          ASSERT(fileSizeInt > 0);
+          result.size = fileSizeInt;
+          result.contents = arenaPushSize(allocator, result.size + 1);
 
-	      if(result.contents)
-		{
-		  result.contents[result.size] = 0; // NOTE: null termination
-		}
-	    }
-	}
+          u8 *dest = result.contents;
+          usz totalBytesToRead = result.size;
+          u32 bytesToRead = safeTruncateU64(totalBytesToRead);
+          while(totalBytesToRead)
+            {
+              DWORD bytesRead;
+              if(ReadFile(fileHandle, dest, bytesToRead, &bytesRead, 0))
+                {
+                  dest += bytesRead;
+                  totalBytesToRead -= bytesRead;
+                }
+              else
+                {
+                  DWORD errorCode = GetLastError();
+                  char *errorMessage;
+                  FORMAT_ERROR_AS_STRING(errorCode, errorMessage);
+                  fprintf(stderr, "ERROR: ReadFile failed: %s\n", errorMessage);
+
+                  result.contents = 0;
+                  result.size = 0;
+                  break;
+                }
+
+              if(result.contents)
+                {
+                  result.contents[result.size] = 0; // NOTE: null termination
+                }
+            }
+        }
       else
-	{
-	  DWORD errorCode = GetLastError();
-	  char *errorMessage;
-	  FORMAT_ERROR_AS_STRING(errorCode, errorMessage);
-	  fprintf(stderr, "ERROR: GetFileSizeEx failed: %s\n", errorMessage);
-	}
+        {
+          DWORD errorCode = GetLastError();
+          char *errorMessage;
+          FORMAT_ERROR_AS_STRING(errorCode, errorMessage);
+          fprintf(stderr, "ERROR: GetFileSizeEx failed: %s\n", errorMessage);
+        }
 
       CloseHandle(fileHandle);
     }
@@ -411,28 +411,28 @@ static void
 platformWriteEntireFile(char *filename, Buffer file)
 {
   HANDLE fileHandle = CreateFileA(filename, GENERIC_WRITE, FILE_SHARE_WRITE, 0,
-				  CREATE_ALWAYS, 0, 0);
+                                  CREATE_ALWAYS, 0, 0);
   if(fileHandle != INVALID_HANDLE_VALUE)
     {
       void *fileMemory = file.contents;
-      usz bytesRemaining = file.size;      
+      usz bytesRemaining = file.size;
       while(bytesRemaining)
-	{
-	  u32 bytesToWrite = safeTruncateU64(bytesRemaining);
-	  if(WriteFile(fileHandle, fileMemory, bytesToWrite, 0, 0))
-	    {
-	      bytesRemaining -= bytesToWrite;
-	      fileMemory = (u8 *)fileMemory + bytesToWrite;
-	    }
-	  else
-	    {
-	      DWORD errorCode = GetLastError();
-	      char *errorMessage;
-	      FORMAT_ERROR_AS_STRING(errorCode, errorMessage);
-	      fprintf(stderr, "ERROR: WriteFile %s failed: %s\n", filename, errorMessage);
-	    }
-	}
-      
+        {
+          u32 bytesToWrite = safeTruncateU64(bytesRemaining);
+          if(WriteFile(fileHandle, fileMemory, bytesToWrite, 0, 0))
+            {
+              bytesRemaining -= bytesToWrite;
+              fileMemory = (u8 *)fileMemory + bytesToWrite;
+            }
+          else
+            {
+              DWORD errorCode = GetLastError();
+              char *errorMessage;
+              FORMAT_ERROR_AS_STRING(errorCode, errorMessage);
+              fprintf(stderr, "ERROR: WriteFile %s failed: %s\n", filename, errorMessage);
+            }
+        }
+
       CloseHandle(fileHandle);
     }
 }
@@ -441,7 +441,7 @@ static String8
 platformGetPathToModule(void *handleToModule, void *functionInModule, Arena *allocator)
 {
   String8 result = {};
-  
+
   if(!handleToModule)
     {
       GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, (LPCSTR)functionInModule, (HMODULE *)&handleToModule);
@@ -450,7 +450,7 @@ platformGetPathToModule(void *handleToModule, void *functionInModule, Arena *all
   char buffer[MAX_PATH];
   DWORD status = GetModuleFileNameA((HMODULE)handleToModule, buffer, MAX_PATH);
   if(status)
-    {      
+    {
       result = arenaPushString(allocator, STR8_CSTR(buffer));
     }
   else
@@ -485,7 +485,7 @@ readOSTimer(void)
 {
   struct timeval timeVal;
   gettimeofday(&timeVal, 0);
-  
+
   u64 result = getOSTimerFreq()*(u64)timeVal.tv_sec + (u64)timeVal.tv_usec;
   return(result);
 }
@@ -556,11 +556,11 @@ threadCreate(OSThread *thread, BaseThreadProc *func, void *data)
     {
       const char *errorMessage = 0;
       switch(result)
-	{	
-	case EAGAIN: {errorMessage = "insufficient resources";} break;
-	case EINVAL: {errorMessage = "invalid settings in attr";} break;
-	case EPERM: {errorMessage = "no permission to set scheduling policy and parameters in attr";} break;
-	}
+        {
+        case EAGAIN: {errorMessage = "insufficient resources";} break;
+        case EINVAL: {errorMessage = "invalid settings in attr";} break;
+        case EPERM: {errorMessage = "no permission to set scheduling policy and parameters in attr";} break;
+        }
       fprintf(stderr, "ERROR: threadCreate: pthread_create failed: %s\n", errorMessage);
     }
 }
@@ -580,18 +580,18 @@ threadDestroy(OSThread *thread)
   for(;;)
     {
       while(atomicCompareAndSwap(&thread->lock, 0, 1) != 0)
-	{
-	  msecWait(1);
-	}
+        {
+          msecWait(1);
+        }
       if(thread->finished == 1)
-	{
-	  return;
-	}
+        {
+          return;
+        }
       else
-	{
-	  atomicStore(&thread->lock, 0);
-	  msecWait(1);
-	}
+        {
+          atomicStore(&thread->lock, 0);
+          msecWait(1);
+        }
     }
 }
 
@@ -600,6 +600,10 @@ threadDestroy(OSThread *thread)
 //
 
 #include <sys/mman.h>
+#if OS_LINUX
+#  include <sys/syscall.h>
+#elif OS_MAC
+#endif
 
 static void*
 platformAllocateMemory(usz size)
@@ -614,9 +618,76 @@ platformFreeMemory(void *memory, usz size)
   munmap(memory, size);
 }
 
+#if OS_LINUX
+
+#include <sys/syscall.h>
+
+static void*
+platformAllocateRingBufferMemory(usz *sizeIO)
+{
+  usz size = *sizeIO;
+  const usz pageSize = sysconf(_SC_PAGESIZE);
+  size = ALIGN_POW_2(size, pageSize);
+
+  /** NOTE: initialize resources that will be returned by syscalls with invalid values */
+  int fd = -1;
+  void *result = MAP_FAILED;
+  void *map0 = MAP_FAILED;
+  void *map1 = MAP_FAILED;
+
+  /** NOTE: create file with size `size` to back the mapping */
+  fd = syscall(__NR_memfd_create, "GS-MAGIC-RING-BUFFER", FD_CLOEXEC);
+  if(fd == -1) goto rb_alloc_failure; // TODO: log error
+  if(ftruncate(fd, size) == -1) goto rb_alloc_failure; // TODO: log error
+
+  /** NOTE: reserve a virtual address space range of twice the allocation size */
+  result = mmap(0, 2*size, PROT_NONE, MAP_ANONYMOUS|MAP_PRIVATE, -1, 0);
+  if(result == MAP_FAILED) goto rb_alloc_failure; // TODO: log error
+
+  /** NOTE: commit each half of the reserved virtual range to the same physical memory */
+  map0 = mmap((u8*)result + 0*size, size, PROT_READ|PROT_WRITE, MAP_FIXED|MAP_SHARED, fd, 0);
+  if(map0 == MAP_FAILED) goto rb_alloc_failure; // TODO: log error
+  map1 = mmap((u8*)result + 1*size, size, PROT_READ|PROT_WRITE, MAP_FIXED|MAP_SHARED, fd, 0);
+  if(map1 == MAP_FAILED) goto rb_alloc_failure; // TODO: log error
+
+  close(fd);
+
+  *sizeIO = size;
+  return(result);
+
+rb_alloc_failure:
+  if(fd != -1) close(fd);
+  if(result != MAP_FAILED) munmap(result, 2*size);
+  return(0);
+}
+
+static void
+platformFreeRingBufferMemory(void *memory, usz size)
+{
+  munmap(memory, 2*size);
+}
+
+#elif OS_MAC
+
+#error TODO: ring buffer alloc/free
+
+static void*
+platformAllocateRingBufferMemory(usz size)
+{
+
+}
+
+static void
+platformFreeRingBufferMemory(void *memory, usz size)
+{
+
+}
+
+#endif
+
 //
 // atomic operations
-// 
+//
 
 #if COMPILER_GCC || COMPILER_CLANG
 
@@ -681,7 +752,7 @@ struct PluginCode
 {
   bool isValid;
   u64 lastWriteTime;
-  
+
   void *pluginCode;
   PluginAPI pluginAPI;
 };
@@ -695,28 +766,28 @@ loadPluginCode(char *filename)
     {
       result.pluginCode = dlopen(filename, RTLD_NOW);
       if(result.pluginCode)
-	{
-	  result.pluginAPI.gsRenderNewFrame
-	    = (GS_RenderNewFrame*)dlsym(result.pluginCode, "gsRenderNewFrame");
-	  result.pluginAPI.gsAudioProcess
-	    = (GS_AudioProcess*)dlsym(result.pluginCode, "gsAudioProcess");
-	  result.pluginAPI.gsInitializePluginState
-	    = (GS_InitializePluginState*)dlsym(result.pluginCode, "gsInitializePluginState");
-	  
-	  result.isValid = (result.pluginAPI.gsRenderNewFrame &&
-			    result.pluginAPI.gsAudioProcess &&
-			    result.pluginAPI.gsInitializePluginState);
-	}
+        {
+          result.pluginAPI.gsRenderNewFrame
+            = (GS_RenderNewFrame*)dlsym(result.pluginCode, "gsRenderNewFrame");
+          result.pluginAPI.gsAudioProcess
+            = (GS_AudioProcess*)dlsym(result.pluginCode, "gsAudioProcess");
+          result.pluginAPI.gsInitializePluginState
+            = (GS_InitializePluginState*)dlsym(result.pluginCode, "gsInitializePluginState");
+
+          result.isValid = (result.pluginAPI.gsRenderNewFrame &&
+                            result.pluginAPI.gsAudioProcess &&
+                            result.pluginAPI.gsInitializePluginState);
+        }
       else
-	{
-	  fprintf(stderr, "failed to get plugin code: %s\n", dlerror());
-	}
+        {
+          fprintf(stderr, "failed to get plugin code: %s\n", dlerror());
+        }
     }
 
   if(!result.isValid)
     {
-      result.pluginAPI.gsRenderNewFrame	       = 0;
-      result.pluginAPI.gsAudioProcess	       = 0;
+      result.pluginAPI.gsRenderNewFrame        = 0;
+      result.pluginAPI.gsAudioProcess          = 0;
       result.pluginAPI.gsInitializePluginState = 0;
     }
 
@@ -729,15 +800,15 @@ unloadPluginCode(PluginCode *code)
   if(code->pluginCode)
     {
       if(dlclose(code->pluginCode) != 0)
-	{
-	  fprintf(stderr, "ERROR: dlclose failed: %s\n", dlerror());
-	}
+        {
+          fprintf(stderr, "ERROR: dlclose failed: %s\n", dlerror());
+        }
       code->pluginCode = 0;
     }
 
   code->isValid = false;
-  code->pluginAPI.gsRenderNewFrame	  = 0;
-  code->pluginAPI.gsAudioProcess	  = 0;
+  code->pluginAPI.gsRenderNewFrame        = 0;
+  code->pluginAPI.gsAudioProcess          = 0;
   code->pluginAPI.gsInitializePluginState = 0;
 }
 
@@ -762,39 +833,39 @@ platformReadEntireFile(char *filename, Arena *allocator)
     {
       struct stat fileStatus;
       if(fstat(fileHandle, &fileStatus) != -1)
-	{
-	  result.size = fileStatus.st_size;
-	  result.contents = arenaPushSize(allocator, result.size + 1);
-	  
-	  u8 *dest = result.contents;
-	  usz totalBytesToRead = result.size;
-	  usz bytesToRead = MIN(totalBytesToRead, PLATFORM_MAX_READ_SIZE);
-	  while(totalBytesToRead)
-	    {
-	      ssz bytesRead = read(fileHandle, dest, bytesToRead);
-	      if(bytesRead == (ssz)bytesToRead)
-		{
-		  dest += bytesRead;
-		  totalBytesToRead -= bytesRead;
-		}
-	      else
-		{
-		  fprintf(stderr, "ERROR: read failed: %s: %s\n", filename, strerror(errno));
-		  result.contents = 0;
-		  result.size = 0;
-		  break;
-		}
+        {
+          result.size = fileStatus.st_size;
+          result.contents = arenaPushSize(allocator, result.size + 1);
 
-	      if(result.contents)
-		{
-		  result.contents[result.size] = 0; // NOTE: null termination
-		}
-	    }
-	}
+          u8 *dest = result.contents;
+          usz totalBytesToRead = result.size;
+          usz bytesToRead = MIN(totalBytesToRead, PLATFORM_MAX_READ_SIZE);
+          while(totalBytesToRead)
+            {
+              ssz bytesRead = read(fileHandle, dest, bytesToRead);
+              if(bytesRead == (ssz)bytesToRead)
+                {
+                  dest += bytesRead;
+                  totalBytesToRead -= bytesRead;
+                }
+              else
+                {
+                  fprintf(stderr, "ERROR: read failed: %s: %s\n", filename, strerror(errno));
+                  result.contents = 0;
+                  result.size = 0;
+                  break;
+                }
+
+              if(result.contents)
+                {
+                  result.contents[result.size] = 0; // NOTE: null termination
+                }
+            }
+        }
       else
-	{
-	  fprintf(stderr, "ERROR: fstat failed: %s: %s\n", filename, strerror(errno));
-	}
+        {
+          fprintf(stderr, "ERROR: fstat failed: %s: %s\n", filename, strerror(errno));
+        }
 
       close(fileHandle);
     }
@@ -810,26 +881,26 @@ static void
 platformWriteEntireFile(char *filename, Buffer file)
 {
   int fileHandle = open(filename, O_CREAT | O_WRONLY | O_TRUNC,
-			S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
+                        S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
   if(fileHandle != -1)
     {
       void *fileMemory = file.contents;
       usz bytesRemaining = file.size;
       while(bytesRemaining)
-	{
-	  u32 bytesToWrite = safeTruncateU64(bytesRemaining);
-	  ssize_t bytesWritten = write(fileHandle, fileMemory, bytesToWrite);
-	  if(bytesWritten == -1)
-	    {
-	      fprintf(stderr, "ERROR: write %s failed: %s\n", filename, strerror(errno));
-	      break;
-	    }
-	  else
-	    {
-	      bytesRemaining -= bytesWritten;
-	      fileMemory = (u8 *)fileMemory + bytesWritten;
-	    }
-	}
+        {
+          u32 bytesToWrite = safeTruncateU64(bytesRemaining);
+          ssize_t bytesWritten = write(fileHandle, fileMemory, bytesToWrite);
+          if(bytesWritten == -1)
+            {
+              fprintf(stderr, "ERROR: write %s failed: %s\n", filename, strerror(errno));
+              break;
+            }
+          else
+            {
+              bytesRemaining -= bytesWritten;
+              fileMemory = (u8 *)fileMemory + bytesWritten;
+            }
+        }
 
       close(fileHandle);
     }
@@ -849,9 +920,9 @@ platformGetPathToModule(void *handleToModule, void *functionInModule, Arena *all
   if(dladdr(functionInModule, &dlInfo))
     {
       if(dlInfo.dli_fname)
-	{
-	  result = arenaPushString(allocator, STR8_CSTR((char *)dlInfo.dli_fname));
-	}
+        {
+          result = arenaPushString(allocator, STR8_CSTR((char *)dlInfo.dli_fname));
+        }
     }
   else
     {
@@ -863,7 +934,7 @@ platformGetPathToModule(void *handleToModule, void *functionInModule, Arena *all
 
 #else
 #error ERROR: unsupported OS
-#endif 
+#endif
 
 static void
 platformFreeFileMemory(Buffer file, Arena *allocator)
@@ -886,7 +957,7 @@ estimateCPUCyclesPerSecond(void)
   u64 osFreq = getOSTimerFreq();
   u64 clocksToWait = millisecondsToWait*osFreq/1000;
 
-  u64 clocksElapsed = 0;  
+  u64 clocksElapsed = 0;
   u64 startClocks = readOSTimer();
   while(clocksElapsed < clocksToWait)
     {

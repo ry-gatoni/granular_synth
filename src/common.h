@@ -38,6 +38,13 @@ enum PluginHost
   PluginHost_executable,
   PluginHost_daw,
   PluginHost_web,
+  PluginHost_Count,
+};
+
+static b32 hostSupportsRingBufferMagic[PluginHost_Count] = {
+  1,
+  1,
+  0,
 };
 
 struct PluginMemory

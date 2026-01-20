@@ -254,6 +254,11 @@ gsInitializePluginState(PluginMemory *memoryBlock)
         pluginState->outputStream.pluginState = pluginState;
       }
 
+      // NOTE: initialize internal buffers
+      b32 buffersAreMagic = hostSupportsRingBufferMagic[pluginState->pluginHost];
+      rbInit(&pluginState->inputBuffer, KILOBYTES(8),  buffersAreMagic);
+      rbInit(&pluginState->grainBuffer, KILOBYTES(64), buffersAreMagic);
+
       // NOTE: grain buffer initialization
       pluginState->grainManager = initializeGrainManager(pluginState);
 
