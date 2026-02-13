@@ -536,6 +536,8 @@ main(int argc, char **argv)
       pluginMemory.platformAPI.gsFreeMemory     = platformFreeMemory;
       pluginMemory.platformAPI.gsCopyMemory     = gsCopyMemory;
       pluginMemory.platformAPI.gsSetMemory      = gsSetMemory;
+      pluginMemory.platformAPI.gsAllocateRingBufferMemory = platformAllocateRingBufferMemory;
+      pluginMemory.platformAPI.gsFreeRingBufferMemory = platformFreeRingBufferMemory;
       pluginMemory.platformAPI.gsArenaAcquire   = gsArenaAcquire;
       pluginMemory.platformAPI.gsArenaDiscard   = gsArenaDiscard;
 

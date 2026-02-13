@@ -1,5 +1,9 @@
 #if 1
 
+// NOTE: This structure is designed to provide contiguous views of samples when
+// reading. This is achieved using virtual memory tricks when the host platform
+// supports it, or by writing to two contiguous regions of memory otherwise. See
+// https://fgiesen.wordpress.com/2012/07/21/the-magic-ring-buffer/ for details.
 struct AudioRingBuffer
 {
   SamplePair *samples;
@@ -44,6 +48,7 @@ rbInit(AudioRingBuffer *rb, u64 sampleCount, b32 isMagic)
   return(1);
 }
 
+#if 0
 static inline u64
 rbAvailableReadSampleCount(AudioRingBuffer *rb)
 {
@@ -65,7 +70,70 @@ rbReadFromBuffer(AudioRingBuffer *rb, SamplePair *dest, u64 sampleCount)
   }
   rb->readIndex += sampleCount;
 }
+#endif
 
+struct AudioRingBufferView
+{
+  SamplePair *start;
+  SamplePair *end;
+};
+
+static inline AudioRingBufferView
+rbGetReadableView(AudioRingBuffer *rb)
+{
+  u64 readIndexWrapped = (rb->readIndex & (rb->sampleCount - 1));
+  u64 sampleCount = rb->writeIndex - rb->readIndex;
+  SamplePair *start = rb->samples + readIndexWrapped;
+  SamplePair *end = start + sampleCount;
+  rb->readIndex += sampleCount;
+
+  AudioRingBufferView result = {};
+  result.start = start;
+  result.end = end;
+  return(result);
+}
+
+static inline AudioRingBufferView
+rbGetWritableView(AudioRingBuffer *rb, u64 sampleCount)
+{
+  u64 writeIndexWrapped = (rb->writeIndex & (rb->sampleCount - 1));
+  u64 samplesAvailable = rb->sampleCount + rb->readIndex - rb->writeIndex;
+  sampleCount = MIN(sampleCount, samplesAvailable);
+  SamplePair *start = rb->samples + writeIndexWrapped;
+  SamplePair *end = start + sampleCount;
+  ZERO_ARRAY(start, sampleCount, SamplePair);
+
+  AudioRingBufferView result = {};
+  result.start = start;
+  result.end = end;
+  return(result);
+}
+
+static inline void
+rbCommitWrite(AudioRingBuffer *rb, AudioRingBufferView view)
+{
+  u64 samplesWritten = INT_FROM_PTR(view.end - view.start);
+  if(!rb->isMagic)
+  {
+    u64 startIndex = INT_FROM_PTR(view.start - rb->samples);
+    u64 samplesToBufferEnd = rb->sampleCount - startIndex;
+    u64 samplesToWrite = MIN(samplesWritten, samplesToBufferEnd);
+    SamplePair *src = view.start;
+    SamplePair *dest = rb->samples + rb->sampleCount + startIndex;
+    COPY_ARRAY(dest, view.start, samplesToWrite, SamplePair);
+
+    if(samplesToWrite < samplesWritten)
+    {
+      samplesToWrite = samplesWritten - samplesToWrite;
+      src = view.start + samplesToWrite;
+      dest = rb->samples;
+      COPY_ARRAY(dest, src, samplesToWrite, SamplePair);
+    }
+  }
+  rb->writeIndex += samplesWritten;
+}
+
+#if 0
 static inline void
 rbWriteToBuffer(AudioRingBuffer *rb, SamplePair *src, u64 sampleCount)
 {
@@ -97,6 +165,8 @@ rbClearSamples(AudioRingBuffer *rb, u64 startIndex, u64 endIndex)
     ZERO_ARRAY(rb->samples, samplesRemaining, SamplePair);
   }
 }
+
+#endif
 
 #else
 struct AudioRingBuffer

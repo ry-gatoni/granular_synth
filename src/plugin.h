@@ -326,7 +326,9 @@ struct InputMixStream
 {
   BufferStream stream; // NOTE: must be the first member for casting reasons
   BufferStream *clone; // NOTE: copy of state after refill because this stream has multiple consumers
-  Arena *refillArena;
+  //Arena *refillArena;
+
+  AudioRingBuffer *inputBuffer;
 
   PluginAudioBuffer *audioBuffer;
   PluginState *pluginState;
@@ -362,7 +364,10 @@ struct PluginState
   BufferStream inputStreamClone;
 
   AudioRingBuffer inputBuffer;
-  AudioRingBuffer grainBuffer;
+  AudioRingBuffer grainInputBuffer;
+  AudioRingBuffer grainOutputBuffer;
+
+  AudioRingBuffer grainViewBuffer;
 
   GrainManager grainManager;
   GrainStateView grainStateView;

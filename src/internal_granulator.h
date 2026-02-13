@@ -5,6 +5,7 @@ struct Grain
   Grain* next;
   Grain* prev;
 
+  // TODO: we can probably store less stuff in the grain
   u32 readIndex;
   r32 windowParam;
 
@@ -28,11 +29,6 @@ struct GrainBufferViewEntry
   u32 bufferReadIndex;
   u32 bufferWriteIndex;
 
-  u32 sampleCount;
-  u32 sampleCapacity;
-  //r32 *bufferSamples[2];
-  SamplePair *bufferSamples;
-
   u32 grainCount;
   GrainViewEntry grainViews[32];
 };
@@ -45,11 +41,7 @@ struct GrainStateView
 
   GrainBufferViewEntry views[32];
 
-  //AudioRingBuffer viewBuffer;
-  SamplePair *viewBufferSamples;
-  u32 viewBufferCount;
-  u32 viewBufferWriteIndex;
-  u32 viewBufferReadIndex;
+  AudioRingBuffer *viewBuffer;
 };
 
 struct GrainManager
@@ -58,7 +50,6 @@ struct GrainManager
   BufferStream *sampleSource;
 
   Arena *grainAllocator;
-  Arena *refillArena;
 
   PluginFloatParameter *parameters;
 
@@ -70,13 +61,17 @@ struct GrainManager
 
   Grain *grainFreeList;
 
-  //AudioRingBuffer *grainBuffer;
-  SamplePair *grainBufferSamples;
-  u32 grainBufferCount;
-  u32 readIndex;
-  u32 writeIndex;
+  AudioRingBuffer *internalBuffer;
+  AudioRingBuffer *outputBuffer;
 
   u32 samplesProcessedSinceLastSeed;
 
   r32 *windowBuffer[WindowShape_count];
 };
+
+// NOTE: functions
+
+static GrainManager initializeGrainManager(PluginState *pluginState);
+static void grainMakeViews(GrainManager *grainManager);
+static void synthesize(GrainManager* grainManager, AudioRingBufferView dest);
+static void grainManagerRefill(BufferStream *stream);
