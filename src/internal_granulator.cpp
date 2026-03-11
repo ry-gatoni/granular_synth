@@ -34,24 +34,6 @@ initializeWindows(GrainManager* grainManager)
   }
 }
 
-// static AudioRingBuffer
-// initializeGrainBuffer(PluginState *pluginState, u32 bufferCount)
-// {
-//   AudioRingBuffer grainBuffer = {};
-//   grainBuffer.capacity = bufferCount;
-//   grainBuffer.samples[0] = arenaPushArray(pluginState->permanentArena, bufferCount, r32,
-//                                           arenaFlagsNoZeroAlign(4*sizeof(r32)));
-//   grainBuffer.samples[1] = arenaPushArray(pluginState->permanentArena, bufferCount, r32,
-//                                           arenaFlagsNoZeroAlign(4*sizeof(r32)));
-
-//   r32 offset = pluginReadFloatParameter(&pluginState->parameters[PluginParameter_offset]);
-//   u32 offsetSamples = (u32)offset;
-//   grainBuffer.writeIndex = offsetSamples;
-//   grainBuffer.readIndex = 0;
-
-//   return(grainBuffer);
-// }
-
 static inline void
 makeNewGrain(GrainManager* grainManager, u32 grainSize, r32 windowParam, r32 spread, u32 sampleIndex)
 {
@@ -139,7 +121,7 @@ grainMakeViews(GrainManager *grainManager, AudioRingBufferView newSamples)
   AudioRingBuffer *grainBuffer = grainManager->internalBuffer;
   AudioRingBuffer *viewBuffer = grainStateView->viewBuffer;
 
-  u64 samplesToWrite = INT_FROM_PTR(newSamples.end - newSamples.start);
+  u64 samplesToWrite = newSamples.sampleCount;
 
   // NOTE: queue a new view and fill out its data
   u32 viewWriteIndex = (grainStateView->viewWriteIndex + 1) % ARRAY_COUNT(grainStateView->views);
@@ -150,9 +132,12 @@ grainMakeViews(GrainManager *grainManager, AudioRingBufferView newSamples)
   // NOTE: fill view buffer with grain buffer samples
   {
     AudioRingBufferView destSamples = rbGetWritableView(viewBuffer, samplesToWrite);
-    u64 availableWriteSamples = INT_FROM_PTR(destSamples.end - destSamples.start);
+    u64 availableWriteSamples = destSamples.sampleCount;
     ASSERT(samplesToWrite == availableWriteSamples);
-    COPY_ARRAY(destSamples.start, newSamples.start, samplesToWrite, SamplePair);
+    COPY_ARRAY(destSamples.start[0], newSamples.start[0], samplesToWrite, r32);
+    COPY_ARRAY(destSamples.start[1], newSamples.start[1], samplesToWrite, r32);
+
+    destSamples.sampleCount = samplesToWrite;
     rbCommitWrite(viewBuffer, destSamples);
   }
 
@@ -181,7 +166,7 @@ synthesize(GrainManager* grainManager, AudioRingBufferView dest)
 {
   AudioRingBuffer *grainBuffer = grainManager->internalBuffer;
 
-  u64 samplesToWrite = INT_FROM_PTR(dest.end - dest.start);
+  u64 samplesToWrite = dest.sampleCount;
 
   PluginFloatParameter *densityParam = grainManager->parameters + PluginParameter_density;
   PluginFloatParameter *sizeParam = grainManager->parameters + PluginParameter_size;
@@ -229,8 +214,10 @@ synthesize(GrainManager* grainManager, AudioRingBufferView dest)
       }
     }
 
+    // TODO: loop over channels so we access samples contiguously
     // NOTE: process playing grains
-    SamplePair *destSamples = dest.start;
+    r32 *destL = dest.start[0];
+    r32 *destR = dest.start[1];
     r32 attenFactor = 1.f/MAX(1.f, maxDensity);
     for(Grain *grain = grainManager->firstPlayingGrain; grain; grain = grain->next)
     {
@@ -241,7 +228,8 @@ synthesize(GrainManager* grainManager, AudioRingBufferView dest)
         if(grain->samplesToPlay)
         {
           u64 grainReadIndexWrapped = grain->readIndex & (grainBuffer->sampleCount - 1);
-          SamplePair grainSample = grainBuffer->samples[grainReadIndexWrapped];
+	  r32 grainSampleL = grainBuffer->samples[0][grainReadIndexWrapped];
+	  r32 grainSampleR = grainBuffer->samples[1][grainReadIndexWrapped];
 
           u32 samplesPlayed = grain->length - grain->samplesToPlay;
           r32 samplesPlayedFrac = (r32)samplesPlayed*grain->lengthInv;
@@ -250,11 +238,11 @@ synthesize(GrainManager* grainManager, AudioRingBufferView dest)
           r32 panL = 1.0f - MAX(0.0f, grain->stereoPosition);
           r32 panR = 1.0f + MIN(0.0f, grain->stereoPosition);
 
-          r32 lVal = attenFactor * windowVal * panL * grainSample.left;
-          r32 rVal = attenFactor * windowVal * panR * grainSample.right;
+          r32 lVal = attenFactor * windowVal * panL * grainSampleL;
+          r32 rVal = attenFactor * windowVal * panR * grainSampleR;
 
-          destSamples[sampleIndex].left += lVal;
-          destSamples[sampleIndex].right += rVal;
+	  destL[sampleIndex] += lVal;
+	  destR[sampleIndex] += rVal;
 
           ++grain->readIndex;
           --grain->samplesToPlay;
@@ -286,35 +274,38 @@ synthesize(GrainManager* grainManager, AudioRingBufferView dest)
 }
 
 static void
-grainManagerRefill(BufferStream *stream)
+grainManagerRefill(AudioBufferStream *stream)
 {
-  ASSERT(stream->at == stream->end);
+  ASSERT(stream->sampleCursor == stream->sampleCount)
 
   GrainManager *grainManager = (GrainManager*)stream;
   AudioRingBuffer *grainInputBuffer = grainManager->internalBuffer;
   AudioRingBuffer *grainOutputBuffer = grainManager->outputBuffer;
 
   // NOTE: refill our input buffers if needed
-  BufferStream *sampleSource  = grainManager->sampleSource;
-  if(sampleSource->at == sampleSource->end)
+  AudioBufferStream *sampleSource  = grainManager->sampleSource;
+  if(sampleSource->sampleCursor == sampleSource->sampleCount)
   {
     sampleSource->refill(sampleSource);
-    ASSERT(sampleSource->at == sampleSource->start);
+    ASSERT(sampleSource->sampleCursor == 0)
   }
 
-  SamplePair *sampleSourceEnd = (SamplePair*)sampleSource->end;
-  SamplePair *sampleSourceAt = (SamplePair*)sampleSource->at;
-  u64 availableReadSamples = INT_FROM_PTR(sampleSourceEnd - sampleSourceAt);
+  r32 *srcL = sampleSource->startSamples[0] + sampleSource->sampleCursor;
+  r32 *srcR = sampleSource->startSamples[1] + sampleSource->sampleCursor;
+  u64 availableReadSamples = sampleSource->sampleCount;
 
   u64 availableWriteSamples = 0;
   // NOTE: fill the grain buffer
   {
     AudioRingBufferView destSamples = rbGetWritableView(grainInputBuffer, availableReadSamples);
-    availableWriteSamples = INT_FROM_PTR(destSamples.end - destSamples.start);
+    availableWriteSamples = destSamples.sampleCount;
     u64 samplesToWrite = MIN(availableReadSamples, availableWriteSamples);
-    COPY_ARRAY(destSamples.start, sampleSourceAt, samplesToWrite, SamplePair);
+    COPY_ARRAY(destSamples.start[0], srcL, samplesToWrite, r32);
+    COPY_ARRAY(destSamples.start[1], srcR, samplesToWrite, r32);
+
+    destSamples.sampleCount = samplesToWrite;
     rbCommitWrite(grainInputBuffer, destSamples);
-    sampleSource->at += samplesToWrite*sizeof(*sampleSourceAt);
+    sampleSource->sampleCursor += samplesToWrite;
 
     grainMakeViews(grainManager, destSamples);
   }
@@ -324,9 +315,10 @@ grainManagerRefill(BufferStream *stream)
   rbCommitWrite(grainOutputBuffer, destSamples);
 
   AudioRingBufferView readSamples = rbGetReadableView(grainOutputBuffer);
-  stream->start = (u8*)readSamples.start;
-  stream->at = stream->start;
-  stream->end = (u8*)readSamples.end;
+  stream->startSamples[0] = readSamples.start[0];
+  stream->startSamples[1] = readSamples.start[1];
+  stream->sampleCursor = 0;
+  stream->sampleCount = readSamples.sampleCount;
 }
 
 

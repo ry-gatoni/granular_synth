@@ -6,42 +6,37 @@
 // https://fgiesen.wordpress.com/2012/07/21/the-magic-ring-buffer/ for details.
 struct AudioRingBuffer
 {
-  SamplePair *samples;
-  /* r32 *samples[2]; */
+  r32 *samples[2];
   u64 sampleCount;
+
   u64 writeIndex;
   u64 readIndex;
+
   b32 isMagic;
 };
 
 static b32
 rbInit(AudioRingBuffer *rb, u64 sampleCount, b32 isMagic)
 {
-  /* void *lSampleMemory = 0; */
-  /* void *rSampleMemory = 0; */
-  void *sampleMemory = 0;
+  void *lSampleMemory = 0;
+  void *rSampleMemory = 0;
 
   sampleCount = ROUND_UP_POW_2(sampleCount);
-  // usz bufferSizeInBytes = sampleCount*sizeof(r32);
-  usz bufferSizeInBytes = sampleCount*sizeof(SamplePair);
-  /* lSampleMemory = gsAllocateRingBufferMemory(&bufferSizeInBytes); */
-  /* rSampleMemory = gsAllocateRingBufferMemory(&bufferSizeInBytes); */
-  sampleMemory = gsAllocateRingBufferMemory(&bufferSizeInBytes);
-  /* if(lSampleMemory == 0 || rSampleMemory == 0) */
-  if(sampleMemory == 0)
+  usz bufferSizeInBytes = sampleCount*sizeof(r32);
+  lSampleMemory = gsAllocateRingBufferMemory(&bufferSizeInBytes);
+  rSampleMemory = gsAllocateRingBufferMemory(&bufferSizeInBytes);
+  if(lSampleMemory == 0 || rSampleMemory == 0)
   {
     logString("rbInit: ring buffer memory allocation failure\n");
-    /* if(lSampleMemory != 0) gsFreeRingBufferMemory(lSampleMemory, bufferSizeInBytes); */
-    /* if(rSampleMemory != 0) gsFreeRingBufferMemory(rSampleMemory, bufferSizeInBytes); */
+    if(lSampleMemory != 0) gsFreeRingBufferMemory(lSampleMemory, bufferSizeInBytes);
+    if(rSampleMemory != 0) gsFreeRingBufferMemory(rSampleMemory, bufferSizeInBytes);
     ZERO_STRUCT(rb);
     return(0);
   }
 
-  /* rb->sampleCount = bufferSizeInBytes/sizeof(r32); */
-  rb->sampleCount = bufferSizeInBytes/sizeof(SamplePair);
-  /* rb->samples[0] = (r32*)lSampleMemory; */
-  /* rb->samples[1] = (r32*)rSampleMemory; */
-  rb->samples = (SamplePair*)sampleMemory;
+  rb->sampleCount = bufferSizeInBytes/sizeof(r32);
+  rb->samples[0] = (r32*)lSampleMemory;
+  rb->samples[1] = (r32*)rSampleMemory;
   rb->writeIndex = 0;
   rb->readIndex = 0;
   rb->isMagic = isMagic;
@@ -74,8 +69,8 @@ rbReadFromBuffer(AudioRingBuffer *rb, SamplePair *dest, u64 sampleCount)
 
 struct AudioRingBufferView
 {
-  SamplePair *start;
-  SamplePair *end;
+  r32 *start[2];
+  u64 sampleCount;
 };
 
 static inline AudioRingBufferView
@@ -83,13 +78,14 @@ rbGetReadableView(AudioRingBuffer *rb)
 {
   u64 readIndexWrapped = (rb->readIndex & (rb->sampleCount - 1));
   u64 sampleCount = rb->writeIndex - rb->readIndex;
-  SamplePair *start = rb->samples + readIndexWrapped;
-  SamplePair *end = start + sampleCount;
+  r32 *startL = rb->samples[0] + readIndexWrapped;
+  r32 *startR = rb->samples[1] + readIndexWrapped;
   rb->readIndex += sampleCount;
 
   AudioRingBufferView result = {};
-  result.start = start;
-  result.end = end;
+  result.start[0] = startL;
+  result.start[1] = startR;
+  result.sampleCount = sampleCount;
   return(result);
 }
 
@@ -99,35 +95,48 @@ rbGetWritableView(AudioRingBuffer *rb, u64 sampleCount)
   u64 writeIndexWrapped = (rb->writeIndex & (rb->sampleCount - 1));
   u64 samplesAvailable = rb->sampleCount + rb->readIndex - rb->writeIndex;
   sampleCount = MIN(sampleCount, samplesAvailable);
-  SamplePair *start = rb->samples + writeIndexWrapped;
-  SamplePair *end = start + sampleCount;
-  ZERO_ARRAY(start, sampleCount, SamplePair);
+
+  r32 *startL = rb->samples[0] + writeIndexWrapped;
+  r32 *startR = rb->samples[1] + writeIndexWrapped;
+  ZERO_ARRAY(startL, sampleCount, r32);
+  ZERO_ARRAY(startR, sampleCount, r32);
 
   AudioRingBufferView result = {};
-  result.start = start;
-  result.end = end;
+  result.start[0] = startL;
+  result.start[1] = startR;
+  result.sampleCount = sampleCount;
   return(result);
 }
 
 static inline void
 rbCommitWrite(AudioRingBuffer *rb, AudioRingBufferView view)
 {
-  u64 samplesWritten = INT_FROM_PTR(view.end - view.start);
+  u64 samplesWritten = view.sampleCount;
   if(!rb->isMagic)
   {
-    u64 startIndex = INT_FROM_PTR(view.start - rb->samples);
+    u64 startIndexL = INT_FROM_PTR(view.start[0] - rb->samples[0]);
+    u64 startIndexR = INT_FROM_PTR(view.start[1] - rb->samples[1]);
+    ASSERT(startIndexL == startIndexR);
+    u64 startIndex = startIndexL;
     u64 samplesToBufferEnd = rb->sampleCount - startIndex;
     u64 samplesToWrite = MIN(samplesWritten, samplesToBufferEnd);
-    SamplePair *src = view.start;
-    SamplePair *dest = rb->samples + rb->sampleCount + startIndex;
-    COPY_ARRAY(dest, view.start, samplesToWrite, SamplePair);
+
+    r32 *srcL = view.start[0];
+    r32 *srcR = view.start[1];
+    r32 *destL = rb->samples[0];
+    r32 *destR = rb->samples[1];
+    COPY_ARRAY(destL, srcL, samplesToWrite, r32);
+    COPY_ARRAY(destR, srcR, samplesToWrite, r32);
 
     if(samplesToWrite < samplesWritten)
     {
       samplesToWrite = samplesWritten - samplesToWrite;
-      src = view.start + samplesToWrite;
-      dest = rb->samples;
-      COPY_ARRAY(dest, src, samplesToWrite, SamplePair);
+      srcL = view.start[0] + samplesToWrite;
+      srcR = view.start[1] + samplesToWrite;
+      destL = rb->samples[0];
+      destR = rb->samples[1];
+      COPY_ARRAY(destL, srcL, samplesToWrite, r32);
+      COPY_ARRAY(destR, srcR, samplesToWrite, r32);
     }
   }
   rb->writeIndex += samplesWritten;

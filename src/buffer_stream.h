@@ -15,14 +15,12 @@ struct AudioBufferStream;
 #define AUDIO_BUFFER_STREAM_REFILL_PROC(name) void (name) (AudioBufferStream *stream)
 typedef AUDIO_BUFFER_STREAM_REFILL_PROC(AudioBufferStreamRefill);
 
-#define MAX_CHANNEL_COUNT 8
 struct AudioBufferStream
 {
-  r32 *channels[MAX_CHANNEL_COUNT];
-
-  u32 channelCount;
-  u32 frameCount;
-  u32 at;
+  r32 *startSamples[2];
+  
+  u32 sampleCount;
+  u32 sampleCursor;
 
   AudioBufferStreamRefill *refill;
 };

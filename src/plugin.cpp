@@ -1575,34 +1575,32 @@ gsRenderNewFrame(PluginMemory *memory, PluginInput *input, RenderCommands *rende
             }
           }
 
+	  v2 sampleBarOffsets[2] = {lowerRegionMiddle, upperRegionMiddle};
+
           r32 samplesPerPixel = (r32)grainBufferCapacity/dim.x;
-          u32 lastSampleIndex = 0;
           u32 widthInPixels = (u32)dim.x;
-          for(u32 pixel = 0; pixel < widthInPixels; ++pixel)
-          {
-            r32 samplePosition = samplesPerPixel*pixel;
-            u32 sampleIndex = (u32)samplePosition;
-            r32 sampleL = 0.f;
-            r32 sampleR = 0.f;
-            for(u32 i = lastSampleIndex; i < sampleIndex; ++i)
-            {
-              sampleL += grainViewBuffer->samples[i].left;
-              sampleR += grainViewBuffer->samples[i].right;
-            }
-            sampleL /= samplesPerPixel;
-            sampleR /= samplesPerPixel;
+	  for(u32 channelIdx = 0; channelIdx < ARRAY_COUNT(grainViewBuffer->samples); ++channelIdx)
+	  {
+	    u32 lastSampleIndex = 0;
+	    for(u32 pixel = 0; pixel < widthInPixels; ++pixel)
+	    {
+	      r32 samplePosition = samplesPerPixel*pixel;
+	      u32 sampleIndex = (u32)samplePosition;
+	      r32 sample = 0.f;
+	      for(u32 i = lastSampleIndex; i < sampleIndex; ++i)
+	      {
+		sample += grainViewBuffer->samples[channelIdx][i];
+	      }
+	      sample /= samplesPerPixel;
 
-            Rect2 sampleLBar = rectMinDim(lowerRegionMiddle + V2(pixel, 0.f),
-                                          V2(1.f, 0.5f*sampleL*regionDim.y));
-            Rect2 sampleRBar = rectMinDim(upperRegionMiddle + V2(pixel, 0.f),
-                                          V2(1.f, 0.5f*sampleR*regionDim.y));
-            renderPushQuad(renderCommands, sampleLBar, pluginState->null, 0.f,
-                           RENDER_LEVEL(grainViewSignal), V4(0, 1, 0, 1));
-            renderPushQuad(renderCommands, sampleRBar, pluginState->null, 0.f,
-                           RENDER_LEVEL(grainViewSignal), V4(0, 1, 0, 1));
+	      Rect2 sampleBar = rectMinDim(sampleBarOffsets[channelIdx] + V2(pixel, 0.f),
+					   V2(1.f, 0.5f*sample*regionDim.y));
+	      renderPushQuad(renderCommands, sampleBar, pluginState->null, 0.f,
+			     RENDER_LEVEL(grainViewSignal), V4(0, 1, 0, 1));
 
-            lastSampleIndex = sampleIndex;
-          }
+	      lastSampleIndex = sampleIndex;
+	    }
+	  }
 
           grainStateView->viewReadIndex =
             (viewEntryReadIndex + entriesQueued) % ARRAY_COUNT(grainStateView->views);
@@ -1727,41 +1725,44 @@ pvProcess(BufferStream *stream)
 
 struct PVOutputStream
 {
-  BufferStream stream; // NOTE: must be the first member for casting reasons
-  BufferStream *source;
-  Arena *refillArena;
+  AudioBufferStream stream; // NOTE: must be the first member for casting reasons
+  AudioBufferStream *source;
   AudioRingBuffer *destBuffer;
   u32 synthesisHopSize;
 };
 
 static void
-pvOutput(BufferStream *stream)
+pvOutput(AudioBufferStream *stream)
 {
-  ASSERT(stream->at == stream->end);
+  ASSERT(stream->sampleCursor == stream->sampleCount)
   PVOutputStream *pvStream = (PVOutputStream*)stream;
 
-  Arena *refillArena = pvStream->refillArena;
   AudioRingBuffer *rb = pvStream->destBuffer;
   u32 synthesisHopSize = pvStream->synthesisHopSize;
 
-  BufferStream *pvSource = pvStream->source;
-  if(pvSource->at == pvSource->end) pvSource->refill(pvSource);
-  ASSERT(pvSource->at == pvSource->start);
+  AudioBufferStream *pvSource = pvStream->source;
+  if(pvSource->sampleCursor == pvSource->sampleCount)
+  {
+    pvSource->refill(pvSource);
+    ASSERT(pvSource->sampleCursor == 0);
+  }
 
   // NOTE: add new frame to internal buffer and update buffer write index
   {
-    SamplePair *pvFrameSamples = (SamplePair*)pvSource->at;
-    SamplePair *pvFrameSamplesEnd = (SamplePair*)pvSource->end;
-    u64 samplesToProcess = INT_FROM_PTR(pvFrameSamplesEnd - pvFrameSamples);
-    for(u64 i = 0; i < samplesToProcess; ++i)
-    {
-      u32 writeIndex = (i + rb->writeIndex) & (rb->sampleCount - 1);
-      rb->samples[writeIndex].left  += pvFrameSamples[i].left;
-      rb->samples[writeIndex].right += pvFrameSamples[i].right;
-    }
-    rb->writeIndex += synthesisHopSize;
-    //rb->writeIndex &= rb->sampleCount - 1;
-    pvSource->at += samplesToProcess*sizeof(*pvFrameSamples);
+    r32 *srcL = pvSource->startSamples[0] + pvSource->sampleCursor;
+    r32 *srcR = pvSource->startSamples[1] + pvSource->sampleCursor;
+    u64 availableReadSamples = pvSource->sampleCount;
+
+    // TODO: this logic might be wrong
+    AudioRingBufferView destSamples = rbGetWritableView(rb, availableReadSamples);
+    u64 availableWriteSamples = destSamples.sampleCount;
+    u64 samplesToWrite = MIN(availableReadSamples, availableWriteSamples);
+    COPY_ARRAY(destSamples.start[0], srcL, samplesToWrite, r32);
+    COPY_ARRAY(destSamples.start[1], srcR, samplesToWrite, r32);
+
+    destSamples.sampleCount = synthesisHopSize;
+    rbCommitWrite(rb, destSamples);
+    pvSource->sampleCursor += samplesToWrite;
   }
 
   // NOTE: read from internal buffer, update read index, and clear read region
@@ -1782,13 +1783,13 @@ pvOutput(BufferStream *stream)
 }
 
 static void
-mixOutputSamples(BufferStream *stream)
+mixOutputSamples(AudioBufferStream *stream)
 {
-  ASSERT(stream->at == stream->end);
+  ASSERT(stream->sampleCursor == stream->sampleCount);
 
   OutputMixStream *outMix = (OutputMixStream*)stream;
-  BufferStream *grainSource = outMix->grainSource;
-  BufferStream *inputSource = outMix->inputSource;
+  AudioBufferStream *grainSource = outMix->grainSource;
+  AudioBufferStream *inputSource = outMix->inputSource;
 
   PluginAudioBuffer *audioBuffer = outMix->audioBuffer;
   PluginState *pluginState = outMix->pluginState;
@@ -1799,11 +1800,11 @@ mixOutputSamples(BufferStream *stream)
   PluginFloatParameter *mixParam = params + PluginParameter_mix;
   PluginFloatParameter *spreadParam = params + PluginParameter_spread;
 
-  if(grainSource->at == grainSource->end)
+  if(grainSource->sampleCursor == grainSource->sampleCount)
   {
     grainSource->refill(grainSource);
-    ASSERT(inputSource->at == inputSource->start);
-    ASSERT(grainSource->at == grainSource->start);
+    ASSERT(inputSource->sampleCursor == 0);
+    ASSERT(grainSource->sampleCursor == 0);
   }
 
   r32 formatVolumeFactor = 1.f;
@@ -1828,26 +1829,34 @@ mixOutputSamples(BufferStream *stream)
   UNUSED(genericOutputFramesIntL);
   UNUSED(genericOutputFramesIntR);
 
-  u8 *atMidiBuffer = audioBuffer->midiBuffer;
+  TemporaryMemory scratch = arenaGetScratch(0, 0);
 
-  logFormatString("samples to write: %lu", audioBuffer->framesToWrite);
-  for(u32 frameIndex = 0;
-      frameIndex < audioBuffer->framesToWrite;
-      ++frameIndex, grainSource->at += sizeof(SamplePair), inputSource->at += sizeof(SamplePair))
+  u8 *atMidiBuffer = audioBuffer->midiBuffer;
+  r32 *volume = arenaPushArray(scratch.arena, audioBuffer->framesToWrite, r32);
+  r32 *mix = arenaPushArray(scratch.arena, audioBuffer->framesToWrite, r32);
+  r32 *panner = arenaPushArray(scratch.arena, audioBuffer->framesToWrite, r32);
+  r32 *spread = arenaPushArray(scratch.arena, audioBuffer->framesToWrite, r32);
+  for(u32 frameIdx = 0; frameIdx < audioBuffer->framesToWrite; ++frameIdx)
   {
     // TODO: think harder about how and when parameters are updated from various sources
     atMidiBuffer = midi::parseMidiMessage(atMidiBuffer, pluginState,
-                                          audioBuffer->midiMessageCount, frameIndex);
+					  audioBuffer->midiMessageCount, frameIdx);
 
-    SamplePair grainSample = *(SamplePair*)grainSource->at;
-    SamplePair inputSample = *(SamplePair*)inputSource->at;
+    volume[frameIdx] = formatVolumeFactor * pluginUpdateFloatParameter(volumeParam);
+    mix[frameIdx] = pluginUpdateFloatParameter(mixParam);
+    panner[frameIdx] = pluginUpdateFloatParameter(panParam);
+    spread[frameIdx] = pluginUpdateFloatParameter(spreadParam);
+  }
 
-    r32 volume = formatVolumeFactor * pluginUpdateFloatParameter(volumeParam);
-    r32 mix = pluginUpdateFloatParameter(mixParam);
-    r32 panner = pluginUpdateFloatParameter(panParam);
-    r32 spread = pluginUpdateFloatParameter(spreadParam);
-    for(u32 channelIndex = 0; channelIndex < audioBuffer->outputChannels; ++channelIndex)
+  logFormatString("samples to write: %lu", audioBuffer->framesToWrite);
+  for(u32 channelIndex = 0; channelIndex < audioBuffer->outputChannels; ++channelIndex)
+  {
+    for(u32 frameIndex = 0; frameIndex < audioBuffer->framesToWrite; ++frameIndex)
     {
+      r32 grainSampleL = grainSource->startSamples[0][frameIndex];
+      r32 grainSampleR = grainSource->startSamples[1][frameIndex];
+      r32 inputSample = inputSource->startSamples[channelIndex][frameIndex];
+
 #if 0
       if(grainMixBuffersIntL != INT_FROM_PTR(grainMixBuffers[0]) ||
          grainMixBuffersIntR != INT_FROM_PTR(grainMixBuffers[1]))
@@ -1860,30 +1869,31 @@ mixOutputSamples(BufferStream *stream)
 #endif
 
       r32 mixedVal = 0.f;
-      r32 leftGrainVal = grainSample.left;
-      r32 rightGrainVal = grainSample.right;
+
+      // TODO: maybe do a swizzle on the grain samples upfront so we only do
+      // this math once while also accessing all samples contiguously
       r32 grainVal = 0.f;
       if (channelIndex < 2) {
         // NOTE: Make sure we only process left and right channels
-        r32 tmp = 1.0f / MAX(1.0f + spread, 2.0f);
+        r32 tmp = 1.0f / MAX(1.0f + spread[frameIndex], 2.0f);
         r32 coef_M = 1.0f * tmp;
-        r32 coef_S = spread * tmp;
+        r32 coef_S = spread[frameIndex] * tmp;
 
-        r32 mid = (leftGrainVal + rightGrainVal) * coef_M;
-        r32 sides = (rightGrainVal - leftGrainVal) * coef_S;
+        r32 mid = (grainSampleL + grainSampleR) * coef_M;
+        r32 sides = (grainSampleL - grainSampleR) * coef_S;
 
         // Update grain value based on channel
         if (channelIndex == 0) {
           grainVal = mid - sides; // Left channel
-          grainVal = grainVal * (1 - panner);
+          grainVal = grainVal * (1 - panner[frameIndex]);
         }
         else {
           grainVal = mid + sides; // Right channel
-          grainVal = grainVal * (1 + panner);
+          grainVal = grainVal * (1 + panner[frameIndex]);
         }
       }
 
-      mixedVal += lerp(inputSample.c[channelIndex], grainVal, mix);
+      mixedVal += lerp(inputSample, grainVal, mix[frameIndex]);
       //logFormatString("mixedVal: %.2f", mixedVal);
 
       switch(audioBuffer->outputFormat)
@@ -1891,13 +1901,13 @@ mixOutputSamples(BufferStream *stream)
         case AudioFormat_r32:
         {
           r32 *audioFrames = (r32 *)genericOutputFrames[channelIndex];
-          *audioFrames = volume*mixedVal;
+          *audioFrames = volume[frameIndex]*mixedVal;
           genericOutputFrames[channelIndex] = (u8 *)audioFrames + audioBuffer->outputStride;
         } break;
         case AudioFormat_s16:
         {
           s16 *audioFrames = (s16 *)genericOutputFrames[channelIndex];
-          *audioFrames = (s16)(volume*mixedVal);
+          *audioFrames = (s16)(volume[frameIndex]*mixedVal);
           genericOutputFrames[channelIndex] = (u8 *)audioFrames + audioBuffer->outputStride;
         } break;
 
@@ -1906,18 +1916,20 @@ mixOutputSamples(BufferStream *stream)
     }
   }
 
-  ASSERT(grainSource->at == grainSource->end);
-  ASSERT(inputSource->at == inputSource->end);
+  grainSource->sampleCursor += audioBuffer->framesToWrite;
+  inputSource->sampleCursor += audioBuffer->framesToWrite;
+
+  arenaReleaseScratch(scratch);
 }
 
 static void
-mixInputSamples(BufferStream *stream)
+mixInputSamples(AudioBufferStream *stream)
 {
-  ASSERT(stream->at == stream->end);
+  ASSERT(stream->sampleCursor == stream->sampleCount);
 
   InputMixStream *mix = (InputMixStream*)stream;
 
-  AudioRingBuffer *dest = mix->inputBuffer;
+  AudioRingBuffer *destBuffer = mix->inputBuffer;
 
   PluginAudioBuffer *audioBuffer = mix->audioBuffer;
   PluginState *pluginState = mix->pluginState;
@@ -1925,7 +1937,8 @@ mixInputSamples(BufferStream *stream)
   u32 framesToRead = audioBuffer->framesToWrite;
   logFormatString("samples to read: %lu", framesToRead);
 
-  AudioRingBufferView destSamples = rbGetWritableView(dest, framesToRead);
+  AudioRingBufferView destSamples = rbGetWritableView(destBuffer, framesToRead);
+  ASSERT(destSamples.sampleCount >= framesToRead);
 
   const void *genericInputFrames[2] = {};
   genericInputFrames[0] = audioBuffer->inputBuffer[0];
@@ -1941,8 +1954,10 @@ mixInputSamples(BufferStream *stream)
 
     // TODO: turn playing sound into a buffer stream ?
     PlayingSound *loadedSound = &pluginState->loadedSound;
-    SamplePair *samplesAt = destSamples.start;
-    for(u32 frameIndex = 0; frameIndex < framesToRead; ++frameIndex, ++samplesAt)
+
+    r32 *dest[2] = {destSamples.start[0], destSamples.start[1]};
+
+    for(u32 frameIndex = 0; frameIndex < framesToRead; ++frameIndex)
     {
       bool soundIsPlaying = pluginReadBooleanParameter(&pluginState->soundIsPlaying);
       r32 currentTime = (r32)loadedSound->samplesPlayed + inputBufferReadSpeed*(r32)frameIndex;
@@ -1951,22 +1966,22 @@ mixInputSamples(BufferStream *stream)
 
       if(soundIsPlaying)
       {
-        if(currentTime < loadedSound->sound.sampleCount)
-        {
-          for(u32 channelIndex = 0; channelIndex < audioBuffer->inputChannels; ++channelIndex)
-          {
-            r32 loadedSoundSample0 = loadedSound->sound.samples[channelIndex][soundReadIndex];
-            r32 loadedSoundSample1 = loadedSound->sound.samples[channelIndex][soundReadIndex + 1];
-            r32 loadedSoundSample = lerp(loadedSoundSample0, loadedSoundSample1, soundReadFrac);
+	if(currentTime < loadedSound->sound.sampleCount)
+	{
+	  for(u32 channelIndex = 0; channelIndex < audioBuffer->inputChannels; ++channelIndex)
+	  {
+	    r32 loadedSoundSample0 = loadedSound->sound.samples[channelIndex][soundReadIndex];
+	    r32 loadedSoundSample1 = loadedSound->sound.samples[channelIndex][soundReadIndex + 1];
+	    r32 loadedSoundSample = lerp(loadedSoundSample0, loadedSoundSample1, soundReadFrac);
 
-            samplesAt->c[channelIndex] += 0.5f*loadedSoundSample;
-          }
-        }
-        else
-        {
-          pluginSetBooleanParameter(&pluginState->soundIsPlaying, false);
-          loadedSound->samplesPlayed = 0;
-        }
+	    dest[channelIndex][frameIndex] += 0.5f*loadedSoundSample;
+	  }
+	}
+	else
+	{
+	  pluginSetBooleanParameter(&pluginState->soundIsPlaying, false);
+	  loadedSound->samplesPlayed = 0;
+	}
       }
     }
 
@@ -1982,30 +1997,31 @@ mixInputSamples(BufferStream *stream)
 
   // NOTE: mix input samples
   {
-    SamplePair *samplesAt = destSamples.start;
     switch(audioBuffer->inputFormat)
     {
       case AudioFormat_s16:
       {
-        for(u32 sampleIndex = 0; sampleIndex < framesToRead; ++sampleIndex, ++samplesAt)
-        {
-          for(u32 channelIndex = 0; channelIndex < audioBuffer->inputChannels; ++channelIndex)
-          {
+	for(u32 channelIndex = 0; channelIndex < audioBuffer->inputChannels; ++channelIndex)
+	{
+	  r32 *dest = destSamples.start[channelIndex];
+	  for(u32 sampleIndex = 0; sampleIndex < framesToRead; ++sampleIndex)
+	  {
             s16 inputSample = *(s16*)genericInputFrames[channelIndex];
-            samplesAt->c[channelIndex] += mixFactor * clampToRange((r32)inputSample/(r32)S16_MAX, -1.f, 1.f);
+            dest[sampleIndex] += mixFactor * clampToRange((r32)inputSample/(r32)S16_MAX, -1.f, 1.f);
             genericInputFrames[channelIndex] = (u8*)genericInputFrames[channelIndex] + audioBuffer->inputStride;
-          }
-        }
+	  }
+	}
       }break;
 
       case AudioFormat_r32:
       {
-        for(u32 sampleIndex = 0; sampleIndex < framesToRead; ++sampleIndex, ++samplesAt)
-        {
-          for(u32 channelIndex = 0; channelIndex < audioBuffer->inputChannels; ++channelIndex)
-          {
-            r32 inputSample = *(r32*)genericInputFrames[channelIndex];
-            samplesAt->c[channelIndex] += mixFactor * clampToRange(inputSample, -1.f, 1.f);
+	for(u32 channelIndex = 0; channelIndex < audioBuffer->inputChannels; ++channelIndex)
+	{
+	  r32 *dest = destSamples.start[channelIndex];
+	  for(u32 sampleIndex = 0; sampleIndex < framesToRead; ++sampleIndex)
+	  {
+	    r32 inputSample = *(r32*)genericInputFrames[channelIndex];
+	    dest[sampleIndex] += mixFactor * clampToRange(inputSample, -1.f, 1.f);
             genericInputFrames[channelIndex] = (u8*)genericInputFrames[channelIndex] + audioBuffer->inputStride;
           }
         }
@@ -2015,13 +2031,15 @@ mixInputSamples(BufferStream *stream)
     }
   }
 
-  rbCommitWrite(dest, destSamples);
+  destSamples.sampleCount = framesToRead;
+  rbCommitWrite(destBuffer, destSamples);
 
   // NOTE: expose pointers
-  AudioRingBufferView readSamples = rbGetReadableView(dest);
-  stream->start = (u8*)readSamples.start;
-  stream->at = stream->start;
-  stream->end = (u8*)readSamples.end;
+  AudioRingBufferView readSamples = rbGetReadableView(destBuffer);
+  stream->startSamples[0] = readSamples.start[0];
+  stream->startSamples[1] = readSamples.start[1];
+  stream->sampleCursor = 0;
+  stream->sampleCount = readSamples.sampleCount;
 
   // NOTE: copy to clone
   COPY_ARRAY(mix->clone, stream, 1, BufferStream);

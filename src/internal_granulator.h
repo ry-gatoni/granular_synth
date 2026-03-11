@@ -46,8 +46,8 @@ struct GrainStateView
 
 struct GrainManager
 {
-  BufferStream stream; // NOTE: must always be the first member (so we can do casting tricks)
-  BufferStream *sampleSource;
+  AudioBufferStream stream; // NOTE: must always be the first member (so we can do casting tricks)
+  AudioBufferStream *sampleSource;
 
   Arena *grainAllocator;
 

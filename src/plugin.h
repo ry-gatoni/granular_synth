@@ -307,16 +307,16 @@ struct PlayingSound
 };
 
 // NOTE: stream refill procedures
-static BUFFER_STREAM_REFILL_PROC(mixInputSamples);
-static BUFFER_STREAM_REFILL_PROC(grainManagerRefill);
-static BUFFER_STREAM_REFILL_PROC(mixOutputSamples);
+static AUDIO_BUFFER_STREAM_REFILL_PROC(mixInputSamples);
+static AUDIO_BUFFER_STREAM_REFILL_PROC(grainManagerRefill);
+static AUDIO_BUFFER_STREAM_REFILL_PROC(mixOutputSamples);
 
 // NOTE: streams
 struct OutputMixStream
 {
-  BufferStream stream; // NOTE: must be the first member for casting reasons
-  BufferStream *grainSource; // NOTE: grain process
-  BufferStream *inputSource;
+  AudioBufferStream stream; // NOTE: must be the first member for casting reasons
+  AudioBufferStream *grainSource; // NOTE: grain process
+  AudioBufferStream *inputSource;
 
   PluginAudioBuffer *audioBuffer;
   PluginState *pluginState;
@@ -324,9 +324,8 @@ struct OutputMixStream
 
 struct InputMixStream
 {
-  BufferStream stream; // NOTE: must be the first member for casting reasons
-  BufferStream *clone; // NOTE: copy of state after refill because this stream has multiple consumers
-  //Arena *refillArena;
+  AudioBufferStream stream; // NOTE: must be the first member for casting reasons
+  AudioBufferStream *clone; // NOTE: copy of state after refill because this stream has multiple consumers
 
   AudioRingBuffer *inputBuffer;
 
@@ -361,7 +360,7 @@ struct PluginState
 
   OutputMixStream outputStream;
   InputMixStream inputStream;
-  BufferStream inputStreamClone;
+  AudioBufferStream inputStreamClone;
 
   AudioRingBuffer inputBuffer;
   AudioRingBuffer grainInputBuffer;
