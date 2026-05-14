@@ -30,7 +30,7 @@ binterp(r32 val0, r32 val1, r32 val2, r32 t0)
 {
   r32 t1 = t0 - 1;
   r32 t2 = t0 - 2;
-  
+
   r32 result = 0.5f*t1*t2*val0 - t0*t2*val1 + 0.5f*t0*t1*val2;
 
   return(result);
@@ -42,7 +42,7 @@ cubicInterp(r32 val0, r32 val1, r32 val2, r32 val3, r32 t0)
   r32 t1 = t0 - 1;
   r32 t2 = t0 - 2;
   r32 t3 = t0 - 3;
-  
+
   r32 result = (-1.f/6.f)*t1*t2*t3*val0 + 0.5f*t0*t2*t3*val1 - 0.5f*t0*t1*t3*val2 + 0.5f*t0*t1*t2*val3;
 
   return(result);
@@ -51,6 +51,8 @@ cubicInterp(r32 val0, r32 val1, r32 val2, r32 val3, r32 t0)
 inline u32
 log2(u32 num)
 {
+  ASSERT(!"TODO: make this an intrinsic");
+
   u32 v = num;
   u32 masks[] = {0x2, 0xC, 0xF0, 0xFF00, 0xFFFF0000};
   u32 shifts[] = {1, 2, 4, 8, 16};
@@ -71,6 +73,8 @@ log2(u32 num)
 inline u64
 log2(u64 num)
 {
+  ASSERT(!"TODO: make this an intrinsic");
+
   u64 v = num;
   u64 masks[] = {0x2, 0xC, 0xF0, 0xFF00, 0xFFFF0000, 0xFFFFFFFF00000000};
   u64 shifts[] = {1, 2, 4, 8, 16, 32};
@@ -85,7 +89,7 @@ log2(u64 num)
 	}
     }
 
-  return(result);  
+  return(result);
 }
 
 #define ROUND_UP_TO_POWER_OF_2(num) ((num == (u32)(1 << log2(num))) ? num : (u32)(1 << (log2(num) + 1)))
@@ -223,7 +227,7 @@ inline c64 &
 operator/=(c64 &z, c64 w)
 {
   z = z / w;
-  
+
   return(z);
 }
 
@@ -240,7 +244,7 @@ binterp(c64 val0, c64 val1, c64 val2, r32 t0)
 {
   r32 t1 = t0 - 1;
   r32 t2 = t0 - 2;
-  
+
   c64 result = 0.5f*t1*t2*val0 - t0*t2*val1 + 0.5f*t0*t1*val2;
 
   return(result);
@@ -252,7 +256,7 @@ cubicInterp(c64 val0, c64 val1, c64 val2, c64 val3, r32 t0)
   r32 t1 = t0 - 1;
   r32 t2 = t0 - 2;
   r32 t3 = t0 - 3;
-  
+
   c64 result = (-1.f/6.f)*t1*t2*t3*val0 + 0.5f*t0*t2*t3*val1 - 0.5f*t0*t1*t3*val2 + 0.5f*t0*t1*t2*val3;
 
   return(result);
@@ -484,7 +488,7 @@ V3(r32 x, r32 y, r32 z)
 
 //
 // v4
-// 
+//
 
 static inline v4
 V4(r32 x, r32 y, r32 z, r32 w)
@@ -502,11 +506,11 @@ operator+(v4 v, v4 w)
   return(result);
 }
 
-inline v4 & 
+inline v4 &
 operator+=(v4 &v, v4 w)
 {
   v = v + w;
-  
+
   return(v);
 }
 
@@ -547,7 +551,7 @@ operator*(v4 v, r32 a)
 {
   v4 result = a*v;
 
-  return(result);  
+  return(result);
 }
 
 inline v4 &
@@ -590,7 +594,7 @@ inline mat4
 operator*(mat4 lhs, mat4 rhs)
 {
   mat4 result = {};
-      
+
   r32 *dest = result.E;
   for(u32 i = 0; i < 4; ++i)
     {
@@ -601,7 +605,7 @@ operator*(mat4 lhs, mat4 rhs)
 	    {
 	      r32 lhsVal = lhs.rows[i].E[k];
 	      r32 rhsVal = rhs.rows[k].E[j];
-	      
+
 	      destVal += lhsVal*rhsVal;
 	    }
 
@@ -641,7 +645,7 @@ makeRotationMatrixXY(v2 c, r32 a)
 {
   mat4 result = {};
   r32 ca = gsCos(a);
-  r32 sa = gsSin(a);  
+  r32 sa = gsSin(a);
   result.r1 = V4(ca, -sa, 0,  c.x*(1.f - ca) + c.y*sa);
   result.r2 = V4(sa,  ca, 0, -c.x*sa + c.y*(1.f - ca));
   result.r3 = V4(0, 0, 1, 0);
@@ -692,7 +696,7 @@ makeRange(u32 min, u32 max)
 }
 
 inline u32
-getLength(RangeU32 range)  
+getLength(RangeU32 range)
 {
   ASSERT(range.max >= range.min);
   u32 result = range.max - range.min;
@@ -814,7 +818,7 @@ percentageFromRange(r32 val, RangeR32 range)
 //
 
 static inline Rect2
-rectMinMax(v2 min, v2 max)  
+rectMinMax(v2 min, v2 max)
 {
   Rect2 result = {};
   result.min = min;
@@ -827,7 +831,7 @@ static inline Rect2
 rectMinDim(v2 min, v2 dim)
 {
   Rect2 result = rectMinMax(min, min + dim);
-    
+
   return(result);
 }
 

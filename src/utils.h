@@ -21,6 +21,15 @@
 #define EXPORT_FUNCTION C_LINKAGE PUBLIC_SYMBOL
 
 #if COMPILER_MSVC
+#  define FORCE_INLINE __forceinline
+#elif COMPILER_CLANG || COMPILER_GCC
+#  define FORCE_INLINE inline __attribute__((always_inline))
+#else
+#  warning FORCE_INLINE not supported on this compiler
+#  define FORCE_INLINE inline
+#endif
+
+#if COMPILER_MSVC
 #  define thread_var __declspec(thread)
 #elif COMPILER_CLANG || COMPILER_GCC
 #  define thread_var __thread

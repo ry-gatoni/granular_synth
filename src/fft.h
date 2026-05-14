@@ -18,6 +18,177 @@ typedef IFFT_FUNCTION(IFFT_Function);
 static FFT_Function *fft = 0;
 static IFFT_Function *ifft = 0;
 
+// TODO: put in simd layer
+#include <immintrin.h>
+struct R32x4
+{
+  static usz constexpr count = 4; // number of elements in vector
+  static usz constexpr size = 16; // size of vector in bytes
+
+  __m128 v;
+
+  R32x4() {}
+  explicit R32x4(__m128 x) : v(x) {}
+  explicit R32x4(r32 x) : v(_mm_set1_ps(x)) {}
+
+  static R32x4 load(r32 const *src) { return(R32x4(_mm_loadu_ps(src))); }
+  void store(r32 *dest) { _mm_storeu_ps(dest, v); }
+
+  R32x4 operator+(R32x4 b) { return(R32x4(_mm_add_ps(v, b.v))); }
+  R32x4 operator-(R32x4 b) { return(R32x4(_mm_sub_ps(v, b.v))); }
+  R32x4 operator*(R32x4 b) { return(R32x4(_mm_mul_ps(v, b.v))); }
+
+  static FORCE_INLINE void
+  load_deinterleave(R32x4 &re, R32x4 &im, r32 const *src)
+  {
+    __m128 const t0 = _mm_loadu_ps(src);
+    __m128 const t1 = _mm_loadu_ps(src + count);
+
+    re.v = _mm_shuffle_ps(t0, t1, _MM_SHUFFLE(2, 0, 2, 0));
+    im.v = _mm_shuffle_ps(t0, t1, _MM_SHUFFLE(3, 1, 3, 1));
+  }
+
+  static FORCE_INLINE void
+  store_interleaved(r32 *dest, R32x4 re, R32x4 im)
+  {
+    __m128 const t0 = _mm_unpacklo_ps(re.v, im.v);
+    __m128 const t1 = _mm_unpackhi_ps(re.v, im.v);
+
+    _mm_storeu_ps(dest, t0);
+    _mm_storeu_ps(dest + count, t1);
+  }
+};
+
+#define MAX_FFT_COUNT 4096
+// NOTE:
+// twiddle_table__radix_2[N:2N] stores the N complex twiddles for a half-circle
+// twiddle_table__radix_2[N + k] = exp(-2pi * i * k / 2N)
+static c64 twiddle_table__radix_2[MAX_FFT_COUNT] = {};
+
+static void
+init_twiddle_tables(void)
+{
+  for(usz n = 1; n < ARRAY_COUNT(twiddle_table__radix_2); n *= 2)
+  {
+    r64 step = - GS_TAU / (r64)(n*2);
+    c64 *twiddles = twiddle_table__radix_2 + n;
+    for(usz k = 0; k < n/2; ++k)
+    {
+      r64 phase = step * (r64)k;
+      twiddles[k] = C64Polar(1, phase);
+    }
+  }
+}
+
+enum FftSign
+{
+  FftSign_negative, /* forward fft */
+  FftSign_positive, /* inverse fft */
+};
+
+// NOTE: template parameter should be one of the simd types in simd.h
+template<typename T>
+static void fft_kernel__radix_2(c64 *io, usz level, usz count)
+{
+  T two(2.f);
+  for(usz k = 0; k < count; k += 2*level)
+  {
+    c64 *twiddles = twiddle_table__radix_2 + level;
+    c64 *io0 = io + 0*level + k;
+    c64 *io1 = io + 1*level + k;
+
+    for(usz j = 0; j < level; ++j)
+    {
+      T w_re, w_im;
+      T::load_deinterleave(w_re, w_im, (r32*)twiddles);
+
+      T in0_re, in0_im;
+      T::load_deinterleave(in0_re, in0_im, (r32*)io0);
+
+      T in1_re, in1_im;
+      T::load_deinterleave(in1_re, in1_im, (r32*)io1);
+
+      T out0_re = in0_re + w_re*in1_re - w_im*in1_im;
+      T out0_im = in0_im + w_re*in1_im - w_im*in1_re;
+      T out1_re = two*in0_re - out0_re;
+      T out1_im = two*in0_im - out0_im;
+
+      T::store_interleaved((r32*)io0, out0_re, out0_im);
+      T::store_interleaved((r32*)io1, out1_re, out1_im);
+
+      twiddles += T::count;
+      io0 += T::count;
+      io1 += T::count;
+    }
+  }
+}
+
+//template void fft_kernel__radix_2<R32x4>(c64 *io, usz level, usz count, FftSign sign);
+
+template<typename T>
+static usz
+fft_initial__radix_2(c64 *out, r32 *in, usz count)
+{
+  usz count_log2 = log2(count);
+  for(usz i = 0; i < count; ++i)
+  {
+    usz i_rev = reverseBits(i) >> (8*sizeof(count) - count_log2);
+    out[i_rev] = C64(in[i], 0);
+  }
+
+  for(usz level = 1; level < T::count; level *= 2)
+  {
+    c64 *twiddles = twiddle_table__radix_2 + level;
+    for(usz k = 0; k < count; k += 2*level)
+    {
+      c64 *io0 = out + 0*level + k;
+      c64 *io1 = out + 1*level + k;
+      for(usz j = 0; j < level; ++j)
+      {
+	c64 w = twiddles[j];
+	c64 in0 = io0[j];
+	c64 in1 = io1[j];
+
+	c64 out0 = in0 + w*in1;
+	c64 out1 = 2*in0 - out0;
+
+	io0[j] = out0;
+	io1[j] = out1;
+      }
+    }
+  }
+
+  return(T::count);
+}
+
+struct FftKernels
+{
+  usz (*fft_initial)(c64 *out, r32 *in, usz count);
+  void (*fft_kernel)(c64 *io, usz level, usz count);
+
+  usz (*ifft_initial)(c64 *out, r32 *in, usz count);
+  void (*ifft_kernel)(c64 *io, usz level, usz count);
+};
+
+static FftKernels fft_kernels = {};
+
+static void
+init_fft_kernels(void)
+{
+  // TODO: check cpu features to determine which element type to use
+  fft_kernels.fft_initial = &fft_initial__radix_2<R32x4>;
+  fft_kernels.fft_kernel = &fft_kernel__radix_2<R32x4>;
+}
+
+static void fft_re(c64 *out, r32 *in, usz count, FftKernels *kernels)
+{
+  usz const initial_level = kernels->fft_initial(out, in, count);
+  for(usz level = initial_level; level < count; level *= 2)
+  {
+    kernels->fft_kernel(out, level, count);
+  }
+}
+
 // static ComplexPair*
 // fft(Arena *arena, SamplePair *samples, u64 sampleCount)
 // {
