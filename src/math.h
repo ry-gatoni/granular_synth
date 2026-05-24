@@ -48,11 +48,13 @@ cubicInterp(r32 val0, r32 val1, r32 val2, r32 val3, r32 t0)
   return(result);
 }
 
+#if 0 // DEPRECATED
 inline u32
 log2(u32 num)
 {
-  ASSERT(!"TODO: make this an intrinsic");
-
+#if 1
+  u32 result = MSB(num);
+#else
   u32 v = num;
   u32 masks[] = {0x2, 0xC, 0xF0, 0xFF00, 0xFFFF0000};
   u32 shifts[] = {1, 2, 4, 8, 16};
@@ -66,15 +68,16 @@ log2(u32 num)
 	  result |= shifts[i];
 	}
     }
-
+#endif
   return(result);
 }
 
 inline u64
 log2(u64 num)
 {
-  ASSERT(!"TODO: make this an intrinsic");
-
+#if 1
+  u64 result = MSB(num);
+#else
   u64 v = num;
   u64 masks[] = {0x2, 0xC, 0xF0, 0xFF00, 0xFFFF0000, 0xFFFFFFFF00000000};
   u64 shifts[] = {1, 2, 4, 8, 16, 32};
@@ -88,7 +91,7 @@ log2(u64 num)
 	  result |= shifts[i];
 	}
     }
-
+#endif
   return(result);
 }
 
@@ -99,6 +102,7 @@ isPowerOf2(u32 num)
 {
   return(num == ROUND_UP_TO_POWER_OF_2(num));
 }
+#endif
 
 //
 // complex

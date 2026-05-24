@@ -37,6 +37,14 @@
 #  error thread_var not supported on this compiler
 #endif
 
+#if COMPILER_MSVC
+#  define SECTION(name) __declspec(allocate(name))
+#elif COMPILER_CLANG || COMPILER_GCC
+#  define SECTION(name) __attribute__((section(name), used, aligned(1)))
+#else
+#  error SECTION not supported on this compiler
+#endif
+
 #define STATEMENT(a) do { a } while(0)
 #define STRINGIFY_(a) #a
 #define STRINGIFY(a) STRINGIFY_(a)
@@ -83,12 +91,12 @@
 #define ROUND_UP_TO_MULTIPLE(num, length) (((num) % (length)) ? ((num) + (length) - ((num) % (length))) : (num))
 
 #if COMPILER_CLANG || COMPILER_GCC
-#  define MSB(num) (8*sizeof(u32) - __builtin_clz((num)|1) - 1)
-#  define LSB(num) (__builtin_ctz(num))
+#  define MSB(num) (8*sizeof(unsigned long long) - 1 - __builtin_clzll(((unsigned long long)(num))|1))
+#  define LSB(num) (__builtin_ctz(num|1))
 #elif COMPILER_MSVC
 #  include <intrin.h>
 static inline u32 msbHelper(u64 num) { u32 idx = 0; _BitScanReverse64((unsigned long*)&idx, num|1); return(idx); }
-static inline u32 lsbHelper(u64 num) { u32 idx = 0; _BitScanForward64((unsigned long*)&idx, num); return(idx); }
+static inline u32 lsbHelper(u64 num) { u32 idx = 0; _BitScanForward64((unsigned long*)&idx, num|1); return(idx); }
 #  define MSB(num) msbHelper(num)
 #  define LSB(num) lsbHelper(num)
 #else

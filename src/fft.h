@@ -31,6 +31,9 @@ struct R32x4
   explicit R32x4(__m128 x) : v(x) {}
   explicit R32x4(r32 x) : v(_mm_set1_ps(x)) {}
 
+  static R32x4 zero(void) { return(R32x4(0.f)); }
+  static R32x4 neg1(void) { return(R32x4(-1.f)); }
+
   static R32x4 load(r32 const *src) { return(R32x4(_mm_loadu_ps(src))); }
   void store(r32 *dest) { _mm_storeu_ps(dest, v); }
 
@@ -57,25 +60,48 @@ struct R32x4
     _mm_storeu_ps(dest, t0);
     _mm_storeu_ps(dest + count, t1);
   }
+
+  static FORCE_INLINE void
+  transpose4x4(R32x4 &a, R32x4 &b, R32x4 &c, R32x4 &d)
+  {
+    __m128 t0 = _mm_unpacklo_ps(a.v, c.v);
+    __m128 t1 = _mm_unpacklo_ps(b.v, d.v);
+    __m128 t2 = _mm_unpackhi_ps(a.v, c.v);
+    __m128 t3 = _mm_unpackhi_ps(b.v, d.v);
+
+    a.v = _mm_unpacklo_ps(t0, t1);
+    b.v = _mm_unpackhi_ps(t0, t1);
+    c.v = _mm_unpacklo_ps(t2, t3);
+    d.v = _mm_unpackhi_ps(t2, t3);
+  }
 };
 
 #define MAX_FFT_COUNT 4096
 // NOTE:
-// twiddle_table__radix_2[N:2N] stores the N complex twiddles for a half-circle
-// twiddle_table__radix_2[N + k] = exp(-2pi * i * k / 2N)
-static c64 twiddle_table__radix_2[MAX_FFT_COUNT] = {};
+// twiddle_table__radix_2[2N:4N] stores the N twiddle factors for each of the forward and reverse dft
+// twiddle_table__radix_2[2N + k] = cos(-2pi*k/2N)
+//                                = cos(2pi*k/2N)
+// twiddle_table__radix_2[2N + k + N/2] = cos(-2pi*(k + N/2)/2N)
+//                                      = cos(-2pi*k/2N - pi/2)
+//                                      = sin(-2pi*k/2N)
+// twiddle_table__radix_2[2N + k + 3N/2] = cos(-2pi*(k + 3N/2)/2N)
+//                                       = cos(-2pi*k/2N - 3pi/2)
+//                                       = sin(2pi*k/2N)
+static r32 twiddle_table__radix_2[4*MAX_FFT_COUNT] = {};
 
 static void
-init_twiddle_tables(void)
+fftInitTwiddleTables(void)
 {
-  for(usz n = 1; n < ARRAY_COUNT(twiddle_table__radix_2); n *= 2)
+  for(usz n = 1; n <= MAX_FFT_COUNT; n *= 2)
   {
-    r64 step = - GS_TAU / (r64)(n*2);
-    c64 *twiddles = twiddle_table__radix_2 + n;
-    for(usz k = 0; k < n/2; ++k)
+    r64 step = - GS_TAU / (r64)(2*n);
+    r32 *twiddles = twiddle_table__radix_2 + 2*n;
+    for(usz k = 0; k < 2*n; ++k)
     {
       r64 phase = step * (r64)k;
-      twiddles[k] = C64Polar(1, phase);
+      r32 cosine = gsCos((r32)phase);
+      //twiddles[k] = C64Polar(1, phase);
+      twiddles[k] = cosine;
     }
   }
 }
@@ -87,20 +113,23 @@ enum FftSign
 };
 
 // NOTE: template parameter should be one of the simd types in simd.h
-template<typename T>
+template<typename T, FftSign sign>
 static void fft_kernel__radix_2(c64 *io, usz level, usz count)
 {
   T two(2.f);
   for(usz k = 0; k < count; k += 2*level)
   {
-    c64 *twiddles = twiddle_table__radix_2 + level;
+    r32 *twiddles_re = twiddle_table__radix_2 + 2*level;
+    r32 *twiddles_im = twiddles_re + level/2 + sign*level;
     c64 *io0 = io + 0*level + k;
     c64 *io1 = io + 1*level + k;
 
-    for(usz j = 0; j < level; ++j)
+    for(usz j = 0; j < level; j += T::count)
     {
-      T w_re, w_im;
-      T::load_deinterleave(w_re, w_im, (r32*)twiddles);
+      T w_re = T::load(twiddles_re);
+      T w_im = T::load(twiddles_im);
+      // T w_re, w_im;
+      // T::load_deinterleave(w_re, w_im, (r32*)twiddles);
 
       T in0_re, in0_im;
       T::load_deinterleave(in0_re, in0_im, (r32*)io0);
@@ -109,14 +138,17 @@ static void fft_kernel__radix_2(c64 *io, usz level, usz count)
       T::load_deinterleave(in1_re, in1_im, (r32*)io1);
 
       T out0_re = in0_re + w_re*in1_re - w_im*in1_im;
-      T out0_im = in0_im + w_re*in1_im - w_im*in1_re;
+      T out0_im = in0_im + w_re*in1_im + w_im*in1_re;
       T out1_re = two*in0_re - out0_re;
       T out1_im = two*in0_im - out0_im;
 
       T::store_interleaved((r32*)io0, out0_re, out0_im);
       T::store_interleaved((r32*)io1, out1_re, out1_im);
 
-      twiddles += T::count;
+      //twiddles += T::count;
+      twiddles_re += T::count;
+      twiddles_im += T::count;
+
       io0 += T::count;
       io1 += T::count;
     }
@@ -129,7 +161,56 @@ template<typename T>
 static usz
 fft_initial__radix_2(c64 *out, r32 *in, usz count)
 {
-  usz count_log2 = log2(count);
+  usz count_log2 = LOG2(count);
+#if 1
+  for(usz block_idx = 0; block_idx < count/T::count; block_idx += T::count)
+  {
+    // TODO: this whole 4x4 transpose thing is specific to the vector
+    // width. 8-wide vectors would do 8 loads, 3 initial steps, an 8x8
+    // transpose, then 8 complex stores. so we need different branches for
+    // different statically-known vector widths, or maybe make this not
+    // templated at all (though that might be annoying abstracting over
+    // sse/neon/wasm)
+    usz block0_rev = reverseBits(block_idx + 0) >> (8*sizeof(block_idx) - count_log2);
+    usz block1_rev = reverseBits(block_idx + 1) >> (8*sizeof(block_idx) - count_log2);
+    usz block2_rev = reverseBits(block_idx + 2) >> (8*sizeof(block_idx) - count_log2);
+    usz block3_rev = reverseBits(block_idx + 3) >> (8*sizeof(block_idx) - count_log2);
+
+    T in0 = T::load(in + block0_rev);
+    T in1 = T::load(in + block1_rev);
+    T in2 = T::load(in + block2_rev);
+    T in3 = T::load(in + block3_rev);
+
+    // NOTE: initial radix-2 step (stride = 1)
+    T r0 = in0 + in1;
+    T r1 = in0 - in1;
+    T r2 = in2 + in3;
+    T r3 = in2 - in3;
+
+    // TODO: use different twiddle factors for ifft
+
+    // NOTE: subsequent radix-2 step (stride = 2)
+    T s0_re = r0 + r2;
+    T s0_im = T::zero();
+    T s1_re = r1;
+    T s1_im = r3*T::neg1();
+    T s2_re = r0 - r2;
+    T s2_im = T::zero();
+    T s3_re = r1;
+    T s3_im = r3;
+
+    T::transpose4x4(s0_re, s1_re, s2_re, s3_re);
+    T::transpose4x4(s0_im, s1_im, s2_im, s3_im);
+
+    // TODO: scale output for ifft
+
+    T::store_interleaved((r32*)(out + block_idx + 0*count/2 + 0*count/4), s0_re, s0_im);
+    T::store_interleaved((r32*)(out + block_idx + 1*count/2 + 0*count/4), s1_re, s1_im);
+    T::store_interleaved((r32*)(out + block_idx + 0*count/2 + 1*count/4), s2_re, s2_im);
+    T::store_interleaved((r32*)(out + block_idx + 1*count/2 + 1*count/4), s3_re, s3_im);
+  }
+#else
+  // TODO: optimize bit-reverse copy
   for(usz i = 0; i < count; ++i)
   {
     usz i_rev = reverseBits(i) >> (8*sizeof(count) - count_log2);
@@ -138,26 +219,77 @@ fft_initial__radix_2(c64 *out, r32 *in, usz count)
 
   for(usz level = 1; level < T::count; level *= 2)
   {
-    c64 *twiddles = twiddle_table__radix_2 + level;
-    for(usz k = 0; k < count; k += 2*level)
+    // TODO: turn this into templates?
+    switch(level)
     {
-      c64 *io0 = out + 0*level + k;
-      c64 *io1 = out + 1*level + k;
-      for(usz j = 0; j < level; ++j)
+      case 1:
       {
-	c64 w = twiddles[j];
-	c64 in0 = io0[j];
-	c64 in1 = io1[j];
+	for(usz k = 0; k < count; k += 2)
+	{
+	  c64 *io0 = out + 0 + k;
+	  c64 *io1 = out + 1 + k;
 
-	c64 out0 = in0 + w*in1;
-	c64 out1 = 2*in0 - out0;
+	  c64 in0 = io0[0];
+	  c64 in1 = io1[0];
 
-	io0[j] = out0;
-	io1[j] = out1;
-      }
+	  // w = 1
+	  c64 out0 = in0 + in1;
+	  c64 out1 = in0 - in1;
+
+	  io0[0] = out0;
+	  io1[0] = out1;
+	}
+      }break;
+      case 2:
+      {
+	for(usz k = 0; k < count; k += 4)
+	{
+	  c64 *io0 = out + 0 + k;
+	  c64 *io1 = out + 2 + k;
+
+	  c64 in00 = io0[0];
+	  c64 in10 = io1[0];
+	  c64 in01 = io0[1];
+	  c64 in11 = io1[1];
+
+	  // w = 1
+	  c64 out00 = in00 + in10;
+	  c64 out10 = in00 - in10;
+	  // w = i
+	  c64 out01 = C64(in01.re + in11.im, in01.im - in11.re);
+	  c64 out11 = C64(in01.re - in11.im, in01.im + in11.re);
+
+	  io0[0] = out00;
+	  io1[0] = out10;
+	  io0[1] = out01;
+	  io1[1] = out11;
+	}
+      }break;
+      // TODO: case 4 (w = 1, exp(-2pi i / 8), exp(-2pi 2i / 8), exp(-2pi 3i / 8))
+      default:
+      {
+	c64 *twiddles = twiddle_table__radix_2 + level;
+	for(usz k = 0; k < count; k += 2*level)
+	{
+	  c64 *io0 = out + 0*level + k;
+	  c64 *io1 = out + 1*level + k;
+	  for(usz j = 0; j < level; ++j)
+	  {
+	    c64 w = twiddles[j];
+	    c64 in0 = io0[j];
+	    c64 in1 = io1[j];
+
+	    c64 out0 = in0 + w*in1;
+	    c64 out1 = 2*in0 - out0;
+
+	    io0[j] = out0;
+	    io1[j] = out1;
+	  }
+	}
+      }break;
     }
   }
-
+#endif
   return(T::count);
 }
 
@@ -173,19 +305,33 @@ struct FftKernels
 static FftKernels fft_kernels = {};
 
 static void
-init_fft_kernels(void)
+fftInitKernels(void)
 {
   // TODO: check cpu features to determine which element type to use
   fft_kernels.fft_initial = &fft_initial__radix_2<R32x4>;
-  fft_kernels.fft_kernel = &fft_kernel__radix_2<R32x4>;
+  fft_kernels.fft_kernel = &fft_kernel__radix_2<R32x4, FftSign_negative>;
+  fft_kernels.ifft_kernel = &fft_kernel__radix_2<R32x4, FftSign_positive>;
 }
 
-static void fft_re(c64 *out, r32 *in, usz count, FftKernels *kernels)
+static void
+fft_re(c64 *out, r32 *in, usz count, FftKernels *kernels)
 {
   usz const initial_level = kernels->fft_initial(out, in, count);
   for(usz level = initial_level; level < count; level *= 2)
   {
     kernels->fft_kernel(out, level, count);
+  }
+}
+
+static void
+ifft_re(r32 *out, c64 *in, usz count, FftKernels *kernels)
+{
+  // TODO: get types/arguments right for this direction.
+  // maybe make fft all complex and handle real conversion at the ends?
+  usz const initial_level = kernels->ifft_initial(in, out, count);
+  for(usz level = initial_level; level < count; level *= 2)
+  {
+    kernels->ifft_kernel(in, level, count);
   }
 }
 

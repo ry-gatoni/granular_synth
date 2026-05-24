@@ -1,6 +1,31 @@
 #define TEST_LAYER
 
+#include "tests.h"
+
 #include "fft_test.cpp"
+
+static void
+testRunAll(void)
+{
+  TemporaryMemory scratch = arenaGetScratch(0, 0);
+
+  usz testerCount = testGetCount();
+  Tester *testers = testGetFirst();
+  for(usz i = 0; i < testerCount; ++i)
+  {
+    Tester *tester = testers + i;
+    TestResult testResult = tester->fn(scratch.arena, tester->args);
+    if(!testResult.success)
+    {
+      String8 logString = stringListJoin(scratch.arena, &testResult.log, STR8_LIT("\n"));
+      logFormatString("%.*s test failed:\n %.*s",
+		      tester->name.size, tester->name.str,
+		      logString.size, logString.str);
+    }
+  }
+
+  arenaReleaseScratch(scratch);
+}
 
 static void
 testRun(void)
@@ -15,7 +40,7 @@ testRun(void)
   FloatBuffer fftTestInput = {};
   fftTestInput.count = fftTestInputBuffer.size / sizeof(r32);
   fftTestInput.vals = (r32*)fftTestInputBuffer.contents;
-  
+
   ComplexBuffer fftTestTarget = {};
   fftTestTarget.count = fftTestTargetBuffer.size / (2 * sizeof(r32));
   fftTestTarget.reVals = arenaPushArray(scratch.arena, fftTestTarget.count, r32);
@@ -28,11 +53,11 @@ testRun(void)
 	fftTestTarget.imVals[i] = src[2*i + 1];
       }
   }
-  
+
   ComplexBuffer ifftTestInput = fftTestTarget;
   FloatBuffer ifftTestTarget = fftTestInput;
 
-  profileBegin();  
+  profileBegin();
   {
     for(u32 fftTestIdx = 0; fftTestIdx < ARRAY_COUNT(fftFunctions); ++fftTestIdx)
       {

@@ -242,6 +242,10 @@ gsInitializePluginState(PluginMemory *memoryBlock)
             arenaPushString(pluginState->permanentArena, memoryBlock->inputDeviceNames[i]);
         }
 
+      // NOTE: initialize fft tables/functions
+      fftInitKernels();
+      fftInitTwiddleTables();
+
       // NOTE: input/output stream initialization
       {
         pluginState->inputStream.stream.refill = mixInputSamples;
@@ -366,7 +370,8 @@ gsInitializePluginState(PluginMemory *memoryBlock)
 #endif
 
 #if BUILD_TESTING
-      testRun();
+      //testRun();
+      testRunAll();
 #endif
 
       pluginState->initialized = true;
@@ -2056,6 +2061,25 @@ gsAudioProcess(PluginMemory *memory, PluginAudioBuffer *audioBuffer)
     if(pluginState->initialized)
     {
       TemporaryMemory scratch = arenaGetScratch(0, 0);
+
+#if 1 // DEBUG
+      usz const test_count = 1024;
+      usz const test_freq_bin = 4;
+      r32 *const test_signal = arenaPushArray(scratch.arena, test_count, r32);
+      {
+	r32 const phasor_inc = GS_TAU * (r32)test_freq_bin / (r32)test_count;
+	r32 phasor = 0;
+	for(usz i = 0; i < test_count; ++i)
+	{
+	  test_signal[i] = gsSin(phasor);
+	  phasor += phasor_inc;
+	  if(phasor_inc >= GS_TAU) phasor -= GS_TAU;
+	}
+      }
+
+      c64 *test_spectrum = arenaPushArray(scratch.arena, test_count, c64);
+      fft_re(test_spectrum, test_signal, test_count, &fft_kernels);
+#endif
 
       // TODO: think harder about how and when parameters are updated from various sources
       // NOTE: dequeue host-driven parameter value changes
