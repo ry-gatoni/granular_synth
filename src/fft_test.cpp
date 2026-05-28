@@ -11,7 +11,7 @@ struct FftForwardTestArgs
 static TestResult
 testForwardFFT(Arena *arena, r32 *input, usz count, FftKernels *kernels, c64 *target)
 {
-  c64 *output = arenaPushArray(arena, count, c64,
+  c64 *output = arenaPushArray(arena, count/2, c64,
 			       arenaFlagsZeroAlign(64));
   fft_re(output, input, count, kernels);
 
@@ -19,7 +19,31 @@ testForwardFFT(Arena *arena, r32 *input, usz count, FftKernels *kernels, c64 *ta
   String8List log = {};
   {
     r32 const tol = 1e-3;
-    for(usz i = 0; i < count; ++i)
+    // NOTE: test first value (DC + i*Nyquist)
+    {
+      r32 resultDc = output[0].re;
+      r32 resultNq = output[0].im;
+      r32 targetDc = target[0].re;
+      r32 targetNq = target[count/2].re;
+
+      r32 resultMagSq = resultDc*resultDc + resultNq*resultNq;
+      r32 targetMagSq = targetDc*targetDc + targetNq*targetNq;
+      r32 percentErr = gsAbs(resultMagSq - targetMagSq)/targetMagSq;
+      b32 sampleSuccess = percentErr < tol;
+      if(!sampleSuccess)
+      {
+	success = 0;
+	stringListPushFormat(arena, &log,
+			     "fft discrepancy at sample 0:\n"
+			     "  result = %.4f + %.4fi\n"
+			     "  target = %.4f + %.4fi\n",
+			     resultDc, resultNq,
+			     targetDc, targetNq);
+      }
+    }
+
+    // NOTE: test rest of values
+    for(usz i = 1; i < count/2; ++i)
     {
       r32 resultRe = output[i].re;
       r32 resultIm = output[i].im;
@@ -29,9 +53,10 @@ testForwardFFT(Arena *arena, r32 *input, usz count, FftKernels *kernels, c64 *ta
       r32 resultMagSq = resultRe*resultRe + resultIm*resultIm;
       r32 targetMagSq = targetRe*targetRe + targetIm*targetIm;
       r32 percentErr = gsAbs(resultMagSq - targetMagSq)/targetMagSq;
-      success = percentErr < tol;
-      if(!success)
+      b32 sampleSuccess = percentErr < tol;
+      if(!sampleSuccess)
       {
+	success = 0;
 	stringListPushFormat(arena, &log,
 			     "fft discrepancy at sample %lu:\n"
 			     "  result = %.4f + %.4fi\n"
