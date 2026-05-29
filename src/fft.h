@@ -31,7 +31,7 @@ struct R32x4
   explicit R32x4(__m128 x) : v(x) {}
   explicit R32x4(r32 x) : v(_mm_set1_ps(x)) {}
 
-  static R32x4 zero(void) { return(R32x4(0.f)); }
+  static R32x4 zero(void) { return(R32x4(_mm_setzero_ps())); }
   static R32x4 neg1(void) { return(R32x4(-1.f)); }
 
   static R32x4 load(r32 const *src) { return(R32x4(_mm_loadu_ps(src))); }
@@ -80,19 +80,25 @@ struct R32x4
   {
     a.v = _mm_shuffle_ps(a.v, a.v, _MM_SHUFFLE(0, 1, 2, 3));
   }
+
+  template<int dest_idx, int src_idx>
+  static FORCE_INLINE void
+  overwrite(R32x4 &a, R32x4 b)
+  {
+    a.v = _mm_insert_ps(a.v, b.v, _MM_MK_INSERTPS_NDX(src_idx, dest_idx, 0));
+  }
 };
 
 #define MAX_FFT_COUNT 4096
 // NOTE:
 // twiddle_table__radix_2[2N:4N] stores the N twiddle factors for each of the forward and reverse dft
-// twiddle_table__radix_2[2N + k] = cos(-2pi*k/2N)
-//                                = cos(2pi*k/2N)
-// twiddle_table__radix_2[2N + k + N/2] = cos(-2pi*(k + N/2)/2N)
-//                                      = cos(-2pi*k/2N - pi/2)
-//                                      = sin(-2pi*k/2N)
-// twiddle_table__radix_2[2N + k + 3N/2] = cos(-2pi*(k + 3N/2)/2N)
-//                                       = cos(-2pi*k/2N - 3pi/2)
-//                                       = sin(2pi*k/2N)
+// twiddle_table__radix_2[2N + k] = sin(2pi*k/2N)
+// twiddle_table__radix_2[2N + k + N/2] = sin(2pi*(k + N/2)/2N)
+//                                      = sin(2pi*k/2N + pi/2)
+//                                      = cos(2pi*k/2N)
+// twiddle_table__radix_2[2N + k + N] = sin(2pi*(k + N)/2N)
+//                                    = sin(2pi*k/2N + pi)
+//                                    = -sin(2pi*k/2N)
 static r32 twiddle_table__radix_2[4*MAX_FFT_COUNT] = {};
 
 static void
@@ -100,34 +106,37 @@ fftInitTwiddleTables(void)
 {
   for(usz n = 1; n <= MAX_FFT_COUNT; n *= 2)
   {
-    r64 step = - GS_TAU / (r64)(2*n);
+    r64 step = GS_TAU / (r64)(2*n);
     r32 *twiddles = twiddle_table__radix_2 + 2*n;
     for(usz k = 0; k < 2*n; ++k)
     {
       r64 phase = step * (r64)k;
-      r32 cosine = gsCos((r32)phase);
+      r32 sine = gsSin((r32)phase);
       //twiddles[k] = C64Polar(1, phase);
-      twiddles[k] = cosine;
+      twiddles[k] = sine;
     }
   }
 }
 
-enum FftSign
+enum FftDirection
 {
-  FftSign_negative, /* forward fft */
-  FftSign_positive, /* inverse fft */
+  FftDirection_forward, /* fft */
+  FftDirection_inverse, /* ifft */
 };
 
 // NOTE: template parameter should be one of the simd types in simd.h
-template<typename T, FftSign sign>
+template<typename T, FftDirection dir>
 static void
 fft_kernel__radix_2(c64 *io, usz level, usz count)
 {
   T two(2.f);
   for(usz k = 0; k < count; k += 2*level)
   {
-    r32 *twiddles_re = twiddle_table__radix_2 + 2*level;
-    r32 *twiddles_im = twiddles_re + level/2 + sign*level;
+    r32 *twiddles_im = twiddle_table__radix_2 + 2*level;
+    r32 *twiddles_re = twiddles_im + level/2;
+    if(dir == FftDirection_forward) // NOTE: -sine for forward transform
+    { twiddles_im += level; }
+
     c64 *io0 = io + 0*level + k;
     c64 *io1 = io + 1*level + k;
 
@@ -161,7 +170,7 @@ fft_kernel__radix_2(c64 *io, usz level, usz count)
 
 //template void fft_kernel__radix_2<R32x4>(c64 *io, usz level, usz count, FftSign sign);
 
-template<typename T>
+template<typename T, FftDirection dir>
 static usz
 fft_initial__radix_2(c64 *out, c64 *in, usz count)
 {
@@ -198,22 +207,43 @@ fft_initial__radix_2(c64 *out, c64 *in, usz count)
     T r3_re = in2_re - in3_re;
     T r3_im = in2_im - in3_im;
 
-    // TODO: use different twiddle factors for ifft
-
     // NOTE: subsequent radix-2 step (stride = 2)
-    T s0_re = r0_re + r2_re;
-    T s0_im = r0_im + r2_im;
-    T s1_re = r1_re + r3_im;
-    T s1_im = r1_im - r3_re;
-    T s2_re = r0_re - r2_re;
-    T s2_im = r0_im - r2_im;
-    T s3_re = r1_re - r3_im;
-    T s3_im = r1_im + r3_re;
+    T s0_re, s0_im, s1_re, s1_im, s2_re, s2_im, s3_re, s3_im;
+    if(dir == FftDirection_forward)
+    {
+      s0_re = r0_re + r2_re;
+      s0_im = r0_im + r2_im;
+      s1_re = r1_re + r3_im;
+      s1_im = r1_im - r3_re;
+      s2_re = r0_re - r2_re;
+      s2_im = r0_im - r2_im;
+      s3_re = r1_re - r3_im;
+      s3_im = r1_im + r3_re;
+    }
+    else // dir == FftDirection_inverse
+    {
+      T t0_re = r0_re + r2_re;
+      T t0_im = r0_im + r2_im;
+      T t1_re = r1_re - r3_im;
+      T t1_im = r1_im + r3_re;
+      T t2_re = r0_re - r2_re;
+      T t2_im = r0_im - r2_im;
+      T t3_re = r1_re + r3_im;
+      T t3_im = r1_im - r3_re;
+
+      T count_inv(1.f / (r32)count);
+      s0_re = count_inv * t0_re;
+      s0_im = count_inv * t0_im;
+      s1_re = count_inv * t1_re;
+      s1_im = count_inv * t1_im;
+      s2_re = count_inv * t2_re;
+      s2_im = count_inv * t2_im;
+      s3_re = count_inv * t3_re;
+      s3_im = count_inv * t3_im;
+    }
 
     T::transpose4x4(s0_re, s1_re, s2_re, s3_re);
     T::transpose4x4(s0_im, s1_im, s2_im, s3_im);
-
-    // TODO: scale output for ifft
 
     T::store_interleaved((r32*)(out + block_idx + 0*count/2 + 0*count/4), s0_re, s0_im);
     T::store_interleaved((r32*)(out + block_idx + 1*count/2 + 0*count/4), s1_re, s1_im);
@@ -224,27 +254,88 @@ fft_initial__radix_2(c64 *out, c64 *in, usz count)
   return(T::count);
 }
 
-template<typename T>
+template<typename T, FftDirection dir>
 static void
 fft_real_convert__radix_2(c64 *io, usz real_count)
 {
   usz m = real_count/2;
 
   // NOTE: DC and Nyquist
+  if(dir == FftDirection_forward)
   {
     r32 r = io[0].re;
     r32 i = io[0].im;
     io[0].re = r + i; // DC
     io[0].im = r - i; // Nyquist
   }
+  else // FftDirection_inverse
+  {
+    r32 dc = io[0].re;
+    r32 nq = io[0].im;
+    io[0].re = 0.5f*(dc + nq);
+    io[0].im = 0.5f*(dc - nq);
+  }
+
+  // NOTE: passes less than vector width
+  {
+    r32 *twiddles_im = twiddle_table__radix_2 + 2*m;
+    r32 *twiddles_re = twiddles_im + m/2;
+    if(dir == FftDirection_forward) // NOTE: -sine for forward transform
+    { twiddles_im += m; }
+
+    for(usz k = 1; k < T::count; ++k)
+    {
+      r32 w_re = twiddles_re[k];
+      r32 w_im = twiddles_im[k];
+
+      r32 l_re = io[k].re;
+      r32 l_im = io[k].im;
+      r32 r_re = io[m - k].re;
+      r32 r_im = io[m - k].im;
+
+      r32 out0_re, out0_im, out1_re, out1_im;
+      if(dir == FftDirection_forward)
+      {
+	r32 in0_re = 0.5f*(l_re + r_re);
+	r32 in0_im = 0.5f*(l_im - r_im);
+	r32 in1_re = 0.5f*(l_im + r_im);
+	r32 in1_im = 0.5f*(r_re - l_re);
+
+	out0_re = in0_re + w_re*in1_re - w_im*in1_im;
+	out0_im = in0_im + w_re*in1_im + w_im*in1_re;
+	out1_re = in0_re - w_re*in1_re + w_im*in1_im;
+	out1_im = w_re*in1_im + w_im*in1_re - in0_im;
+      }
+      else // dir == FftDirection_inverse
+      {
+	r32 in0_re = 0.5f*(l_re + r_re);
+	r32 in0_im = 0.5f*(l_im - r_im);
+	r32 in1_re = 0.5f*(l_re - r_re);
+	r32 in1_im = 0.5f*(l_im + r_im);
+
+	out0_re = in0_re - w_re*in1_im - w_im*in1_re;
+	out0_im = in0_im + w_re*in1_re - w_im*in1_im;
+	out1_re = in0_re + w_re*in1_im + w_im*in1_re;
+	out1_im = w_re*in1_re - w_im*in1_im - in0_im;
+      }
+
+      io[k].re = out0_re;
+      io[k].im = out0_im;
+      io[m - k].re = out1_re;
+      io[m - k].im = out1_im;
+    }
+  }
 
   // NOTE: inner values
   {
 #if 1
     T half(0.5f);
-    r32 *twiddles_re = twiddle_table__radix_2 + 2*m;
-    r32 *twiddles_im = twiddles_re + m/2;
-    for(usz k = 1; k < m/2; k += T::count) // TODO: mask?
+    r32 *twiddles_im = twiddle_table__radix_2 + 2*m;
+    r32 *twiddles_re = twiddles_im + m/2;
+    if(dir == FftDirection_forward) // NOTE: -sine for forward transform
+    { twiddles_im += m; }
+
+    for(usz k = T::count; k < m/2; k += T::count) // TODO: mask?
     {
       // NOTE: extract even and odd parts of
       // io[k] = x_e[k] + i*x_o[k].
@@ -264,19 +355,59 @@ fft_real_convert__radix_2(c64 *io, usz real_count)
       T::reverse(r_re);
       T::reverse(r_im);
 
-      T in0_re = half*(l_re + r_re);
-      T in0_im = half*(l_im - r_im);
-      T in1_re = half*(l_im + r_im);
-      T in1_im = half*(r_re - l_re);
-
       T w_re = T::load(twiddles_re + k);
       T w_im = T::load(twiddles_im + k);
 
-      // NOTE: radix-2 butterflies (with right side conjugated)
-      T out0_re = in0_re + w_re*in1_re - w_im*in1_im;
-      T out0_im = in0_im + w_re*in1_im + w_im*in1_re;
-      T out1_re = in0_re - w_re*in1_re + w_im*in1_im;
-      T out1_im = w_re*in1_im + w_im*in1_re - in0_im;
+      T out0_re, out0_im, out1_re, out1_im;
+      if(dir == FftDirection_forward)
+      {
+	// x_e[k] = (io[k] + io[m - k]*) / 2
+	T in0_re = half*(l_re + r_re);
+	T in0_im = half*(l_im - r_im);
+	// x_o[k] = (io[k] - io[m - k]*) / 2i
+	T in1_re = half*(l_im + r_im);
+	T in1_im = half*(r_re - l_re);
+
+	// NOTE: radix-2 merge step:
+	// x[k] = x_e[k] + w^k*x_o[k]
+	out0_re = in0_re + w_re*in1_re - w_im*in1_im;
+	out0_im = in0_im + w_re*in1_im + w_im*in1_re;
+	// x[m - k] = x[n - (m + k)] = x[m + k]* = (x_e[k] - w^k*x_o[k])*
+	out1_re = in0_re - w_re*in1_re + w_im*in1_im;
+	out1_im = w_re*in1_im + w_im*in1_re - in0_im;
+
+	// if(k == 0)
+	// {
+	//   T::template overwrite<0, 0>(out0_re, l_re + l_im);
+	//   T::template overwrite<0, 0>(out0_im, l_re - l_im);
+	// }
+      }
+      else // dir == FftDirection_inverse
+      {
+	// NOTE: inverse of the forward direction.
+	//
+	// x_e[k] = (io[k] + io[m - k]*)/2
+	// x_o[k] = (io[k] - io[m - k]*)/2 * w^k*
+	//
+	// x[k] = x_e[k] + i*x_o[k]
+	// x[m - k] = (x_e[k] - i*x_o[k])*
+
+	T in0_re = half*(l_re + r_re);
+	T in0_im = half*(l_im - r_im);
+	T in1_re = half*(l_re - r_re);
+	T in1_im = half*(l_im + r_im);
+
+	out0_re = in0_re - w_re*in1_im - w_im*in1_re;
+	out0_im = in0_im + w_re*in1_re - w_im*in1_im;
+	out1_re = in0_re + w_re*in1_im + w_im*in1_re;
+	out1_im = w_re*in1_re - w_im*in1_im - in0_im;
+
+	// if(k == 0)
+	// {
+	//   T::template overwrite<0, 0>(out0_re, half*(l_re + l_im));
+	//   T::template overwrite<0, 0>(out0_im, half*(l_re - l_im));
+	// }
+      }
       T::reverse(out1_re);
       T::reverse(out1_im);
 
@@ -320,10 +451,13 @@ static void
 fftInitKernels(void)
 {
   // TODO: check cpu features to determine which element type to use
-  fft_kernels.fft_initial = &fft_initial__radix_2<R32x4>;
-  fft_kernels.fft_kernel = &fft_kernel__radix_2<R32x4, FftSign_negative>;
-  fft_kernels.fft_real_convert = &fft_real_convert__radix_2<R32x4>;
-  fft_kernels.ifft_kernel = &fft_kernel__radix_2<R32x4, FftSign_positive>;
+  fft_kernels.fft_initial       = &fft_initial__radix_2<R32x4, FftDirection_forward>;
+  fft_kernels.fft_kernel        = &fft_kernel__radix_2<R32x4, FftDirection_forward>;
+  fft_kernels.fft_real_convert  = &fft_real_convert__radix_2<R32x4, FftDirection_forward>;
+
+  fft_kernels.ifft_real_convert = &fft_real_convert__radix_2<R32x4, FftDirection_inverse>;
+  fft_kernels.ifft_initial      = &fft_initial__radix_2<R32x4, FftDirection_inverse>;
+  fft_kernels.ifft_kernel       = &fft_kernel__radix_2<R32x4, FftDirection_inverse>;
 }
 
 /** Computes DFT of real input.
@@ -340,18 +474,54 @@ fft_re(c64 *out, r32 *in, usz count, FftKernels *kernels)
     kernels->fft_kernel(out, level, count/2);
   }
 
+  // DEBUG:
+  TemporaryMemory scratch = arenaGetScratch(0, 0);
+  String8List debugLogList = {};
+  stringListPush(scratch.arena, &debugLogList, STR8_LIT("fft out pre real-conversion:\n"));
+  for(usz i = 0; i < count/2; ++i)
+  {
+    stringListPushFormat(scratch.arena, &debugLogList,
+			 "[%3lu] = %10.4f + %10.4fi\n",
+			 i, out[i].re, out[i].im);
+  }
+  String8 debugLog = stringListJoin(scratch.arena, &debugLogList, STR8_LIT(""));
+  Buffer debugLogBuffer = {};
+  debugLogBuffer.size = debugLog.size;
+  debugLogBuffer.contents = debugLog.str;
+  gsWriteEntireFile(DATA_PATH"test/fft_re_conversion_test.txt", debugLogBuffer);
+  arenaReleaseScratch(scratch);
+
   kernels->fft_real_convert(out, count);
 }
 
+/** Computes inverse DFT of half-spectrum of the form above, producing real output.
+ */
 static void
 ifft_re(r32 *out, c64 *in, usz count, FftKernels *kernels)
 {
-  // TODO: get types/arguments right for this direction.
-  // maybe make fft all complex and handle real conversion at the ends?
-  usz const initial_level = kernels->ifft_initial((c64*)out, in, count);
-  for(usz level = initial_level; level < count; level *= 2)
+  kernels->ifft_real_convert(in, count);
+
+  // DEBUG:
+  TemporaryMemory scratch = arenaGetScratch(0, 0);
+  String8List debugLogList = {};
+  stringListPush(scratch.arena, &debugLogList, STR8_LIT("ifft in post real-conversion:\n"));
+  for(usz i = 0; i < count/2; ++i)
   {
-    kernels->ifft_kernel((c64*)out, level, count);
+    stringListPushFormat(scratch.arena, &debugLogList,
+			 "[%3lu] = %10.4f + %10.4fi\n",
+			 i, in[i].re, in[i].im);
+  }
+  String8 debugLog = stringListJoin(scratch.arena, &debugLogList, STR8_LIT(""));
+  Buffer debugLogBuffer = {};
+  debugLogBuffer.size = debugLog.size;
+  debugLogBuffer.contents = debugLog.str;
+  gsWriteEntireFile(DATA_PATH"test/ifft_re_conversion_test.txt", debugLogBuffer);
+  arenaReleaseScratch(scratch);
+
+  usz const initial_level = kernels->ifft_initial((c64*)out, in, count/2);
+  for(usz level = initial_level; level < count/2; level *= 2)
+  {
+    kernels->ifft_kernel((c64*)out, level, count/2);
   }
 }
 

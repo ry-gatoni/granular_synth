@@ -370,7 +370,7 @@ gsInitializePluginState(PluginMemory *memoryBlock)
 #endif
 
 #if BUILD_TESTING
-      //testRun();
+      // testRun();
       testRunAll();
 #endif
 

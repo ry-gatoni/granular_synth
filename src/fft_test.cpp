@@ -85,9 +85,14 @@ struct FftReverseTestArgs
 static TestResult
 testReverseFFT(Arena *arena, c64 *input, usz count, FftKernels *kernels, r32 *target)
 {
+  c64 *in = arenaPushArray(arena, count/2, c64,
+			   arenaFlagsZeroAlign(64));
+  COPY_ARRAY(in, input, count/2, c64);
+  in[0].im = input[count/2].re;
   r32 *output = arenaPushArray(arena, count, r32,
 			       arenaFlagsZeroAlign(64));
-  ifft_re(output, input, count, kernels);
+
+  ifft_re(output, in, count, kernels);
 
   b32 success = 1;
   String8List log = {};
@@ -97,9 +102,9 @@ testReverseFFT(Arena *arena, c64 *input, usz count, FftKernels *kernels, r32 *ta
     {
       r32 resultVal = output[i];
       r32 targetVal = target[i];
-      r32 resultSq = resultVal*resultVal;
-      r32 targetSq = targetVal*targetVal;
-      r32 percentErr = gsAbs(resultSq - targetSq)/targetSq;
+      // r32 resultSq = resultVal*resultVal;
+      // r32 targetSq = targetVal*targetVal;
+      r32 percentErr = gsAbs(resultVal - targetVal)/targetVal;
       success = percentErr < tol;
       if(!success)
       {
@@ -141,9 +146,9 @@ TEST_FN_DEF(fft_test, &fft_test_args)
 
 FftReverseTestArgs ifft_test_args = {
   (c64*)fft_test_result,
-  ARRAY_COUNT(fft_test_result)/sizeof(c64),
+  ARRAY_COUNT(fft_test_signal)/sizeof(r32),
   &fft_kernels,
-  (r32*)fft_test_result
+  (r32*)fft_test_signal
 };
 TEST_FN_DEF(ifft_test, &ifft_test_args)
 {
