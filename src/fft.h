@@ -18,77 +18,6 @@ typedef IFFT_FUNCTION(IFFT_Function);
 static FFT_Function *fft = 0;
 static IFFT_Function *ifft = 0;
 
-// TODO: put in simd layer
-#include <immintrin.h>
-struct R32x4
-{
-  static usz constexpr count = 4; // number of elements in vector
-  static usz constexpr size = 16; // size of vector in bytes
-
-  __m128 v;
-
-  R32x4() {}
-  explicit R32x4(__m128 x) : v(x) {}
-  explicit R32x4(r32 x) : v(_mm_set1_ps(x)) {}
-
-  static R32x4 zero(void) { return(R32x4(_mm_setzero_ps())); }
-  static R32x4 neg1(void) { return(R32x4(-1.f)); }
-
-  static R32x4 load(r32 const *src) { return(R32x4(_mm_loadu_ps(src))); }
-  void store(r32 *dest) { _mm_storeu_ps(dest, v); }
-
-  R32x4 operator+(R32x4 b) { return(R32x4(_mm_add_ps(v, b.v))); }
-  R32x4 operator-(R32x4 b) { return(R32x4(_mm_sub_ps(v, b.v))); }
-  R32x4 operator*(R32x4 b) { return(R32x4(_mm_mul_ps(v, b.v))); }
-
-  static FORCE_INLINE void
-  load_deinterleave(R32x4 &re, R32x4 &im, r32 const *src)
-  {
-    __m128 const t0 = _mm_loadu_ps(src);
-    __m128 const t1 = _mm_loadu_ps(src + count);
-
-    re.v = _mm_shuffle_ps(t0, t1, _MM_SHUFFLE(2, 0, 2, 0));
-    im.v = _mm_shuffle_ps(t0, t1, _MM_SHUFFLE(3, 1, 3, 1));
-  }
-
-  static FORCE_INLINE void
-  store_interleaved(r32 *dest, R32x4 re, R32x4 im)
-  {
-    __m128 const t0 = _mm_unpacklo_ps(re.v, im.v);
-    __m128 const t1 = _mm_unpackhi_ps(re.v, im.v);
-
-    _mm_storeu_ps(dest, t0);
-    _mm_storeu_ps(dest + count, t1);
-  }
-
-  static FORCE_INLINE void
-  transpose4x4(R32x4 &a, R32x4 &b, R32x4 &c, R32x4 &d)
-  {
-    __m128 t0 = _mm_unpacklo_ps(a.v, c.v);
-    __m128 t1 = _mm_unpacklo_ps(b.v, d.v);
-    __m128 t2 = _mm_unpackhi_ps(a.v, c.v);
-    __m128 t3 = _mm_unpackhi_ps(b.v, d.v);
-
-    a.v = _mm_unpacklo_ps(t0, t1);
-    b.v = _mm_unpackhi_ps(t0, t1);
-    c.v = _mm_unpacklo_ps(t2, t3);
-    d.v = _mm_unpackhi_ps(t2, t3);
-  }
-
-  static FORCE_INLINE void
-  reverse(R32x4 &a)
-  {
-    a.v = _mm_shuffle_ps(a.v, a.v, _MM_SHUFFLE(0, 1, 2, 3));
-  }
-
-  template<int dest_idx, int src_idx>
-  static FORCE_INLINE void
-  overwrite(R32x4 &a, R32x4 b)
-  {
-    a.v = _mm_insert_ps(a.v, b.v, _MM_MK_INSERTPS_NDX(src_idx, dest_idx, 0));
-  }
-};
-
 #define MAX_FFT_COUNT 4096
 // NOTE:
 // twiddle_table__radix_2[2N:4N] stores the N twiddle factors for each of the forward and reverse dft
@@ -353,7 +282,6 @@ fft_real_convert__radix_2(c64 *io, usz real_count)
 
   // NOTE: inner values
   {
-#if 1
     T half(0.5f);
     r32 *twiddles_im = twiddle_table__radix_2 + 2*m;
     r32 *twiddles_re = twiddles_im + m/2;
@@ -400,12 +328,6 @@ fft_real_convert__radix_2(c64 *io, usz real_count)
 	// x[m - k] = x[n - (m + k)] = x[m + k]* = (x_e[k] - w^k*x_o[k])*
 	out1_re = in0_re - w_re*in1_re + w_im*in1_im;
 	out1_im = w_re*in1_im + w_im*in1_re - in0_im;
-
-	// if(k == 0)
-	// {
-	//   T::template overwrite<0, 0>(out0_re, l_re + l_im);
-	//   T::template overwrite<0, 0>(out0_im, l_re - l_im);
-	// }
       }
       else // dir == FftDirection_inverse
       {
@@ -426,12 +348,6 @@ fft_real_convert__radix_2(c64 *io, usz real_count)
 	out0_im = in0_im + w_re*in1_re - w_im*in1_im;
 	out1_re = in0_re + w_re*in1_im + w_im*in1_re;
 	out1_im = w_re*in1_re - w_im*in1_im - in0_im;
-
-	// if(k == 0)
-	// {
-	//   T::template overwrite<0, 0>(out0_re, half*(l_re + l_im));
-	//   T::template overwrite<0, 0>(out0_im, half*(l_re - l_im));
-	// }
       }
       T::reverse(out1_re);
       T::reverse(out1_im);
@@ -439,23 +355,6 @@ fft_real_convert__radix_2(c64 *io, usz real_count)
       T::store_interleaved((r32*)(io + k), out0_re, out0_im);
       T::store_interleaved((r32*)(io + m - k - (T::count - 1)), out1_re, out1_im);
     }
-#else
-    r32 *twiddles_re = twiddle_table__radix_2 + 2*m;
-    r32 *twiddles_im = twiddles_re + m/2;
-    for(usz k = 1; k < m/2; ++k)
-    {
-      c64 l = io[k];
-      c64 r = io[m - k];
-      c64 in0 = 0.5f*(l + conjugateC64(r));
-      c64 in1 = 0.5f*(l - conjugateC64(r))/C64(0, 1);
-
-      c64 w = C64(twiddles_re[k], twiddles_im[k]);
-      c64 out0 = in0 + w*in1;
-      c64 out1 = conjugateC64(in0 - w*in1);
-      io[k] = out0;
-      io[m - k] = out1;
-    }
-#endif
   }
 }
 

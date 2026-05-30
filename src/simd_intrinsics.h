@@ -1,5 +1,217 @@
 #pragma once
 
+// NOTE: scalar 32-bit float type. always available
+struct R32x1
+{
+  using Scalar = R32x1;
+  static usz constexpr count = 1; // number of elements in "vector"
+  static usz constexpr size = 4; // size of "vector" in bytes
+
+  r32 v;
+
+  R32x1() {}
+  R32x1(r32 x) : v(x) {}
+
+  static R32x1 load(r32 const *src) { return(R32x1(*src)); }
+  void store(r32 *dest) { *dest = v; }
+
+  R32x1 operator+(R32x1 b) { return(R32x1(v + b.v)); }
+  R32x1 operator-(R32x1 b) { return(R32x1(v - b.v)); }
+  R32x1 operator*(R32x1 b) { return(R32x1(v * b.v)); }
+
+  static FORCE_INLINE void
+  load_deinterleave(R32x1 &re, R32x1 &im, r32 const *src)
+  {
+    re.v = src[0];
+    im.v = src[1];
+  }
+
+  static FORCE_INLINE void
+  store_interleaved(r32 *dest, R32x1 re, R32x1 im)
+  {
+    dest[0] = re.v;
+    dest[1] = im.v;
+  }
+
+  static FORCE_INLINE void
+  reverse(R32x1 &a) { UNUSED(a); }
+};
+
+#if ARCH_X86 || ARCH_X64
+
+#include <immintrin.h>
+
+// TODO: preprocessor checks to only compile if extensions are available on builder's machine
+// NOTE: 4x 32-bit float type. requires sse extensions (TODO: which versions?)
+struct R32x4
+{
+  using Scalar = R32x1;
+  static usz constexpr count = 4; // number of elements in vector
+  static usz constexpr size = 16; // size of vector in bytes
+
+  __m128 v;
+
+  R32x4() {}
+  explicit R32x4(__m128 x) : v(x) {}
+  explicit R32x4(r32 x) : v(_mm_set1_ps(x)) {}
+
+  static R32x4 zero(void) { return(R32x4(_mm_setzero_ps())); }
+  static R32x4 neg1(void) { return(R32x4(-1.f)); }
+
+  static R32x4 load(r32 const *src) { return(R32x4(_mm_loadu_ps(src))); }
+  void store(r32 *dest) { _mm_storeu_ps(dest, v); }
+
+  R32x4 operator+(R32x4 b) { return(R32x4(_mm_add_ps(v, b.v))); }
+  R32x4 operator-(R32x4 b) { return(R32x4(_mm_sub_ps(v, b.v))); }
+  R32x4 operator*(R32x4 b) { return(R32x4(_mm_mul_ps(v, b.v))); }
+
+  static FORCE_INLINE void
+  load_deinterleave(R32x4 &re, R32x4 &im, r32 const *src)
+  {
+    __m128 const t0 = _mm_loadu_ps(src);
+    __m128 const t1 = _mm_loadu_ps(src + count);
+
+    re.v = _mm_shuffle_ps(t0, t1, _MM_SHUFFLE(2, 0, 2, 0));
+    im.v = _mm_shuffle_ps(t0, t1, _MM_SHUFFLE(3, 1, 3, 1));
+  }
+
+  static FORCE_INLINE void
+  store_interleaved(r32 *dest, R32x4 re, R32x4 im)
+  {
+    __m128 const t0 = _mm_unpacklo_ps(re.v, im.v);
+    __m128 const t1 = _mm_unpackhi_ps(re.v, im.v);
+
+    _mm_storeu_ps(dest, t0);
+    _mm_storeu_ps(dest + count, t1);
+  }
+
+  static FORCE_INLINE void
+  transpose4x4(R32x4 &a, R32x4 &b, R32x4 &c, R32x4 &d)
+  {
+    __m128 t0 = _mm_unpacklo_ps(a.v, c.v);
+    __m128 t1 = _mm_unpacklo_ps(b.v, d.v);
+    __m128 t2 = _mm_unpackhi_ps(a.v, c.v);
+    __m128 t3 = _mm_unpackhi_ps(b.v, d.v);
+
+    a.v = _mm_unpacklo_ps(t0, t1);
+    b.v = _mm_unpackhi_ps(t0, t1);
+    c.v = _mm_unpacklo_ps(t2, t3);
+    d.v = _mm_unpackhi_ps(t2, t3);
+  }
+
+  static FORCE_INLINE void
+  reverse(R32x4 &a)
+  {
+    a.v = _mm_shuffle_ps(a.v, a.v, _MM_SHUFFLE(0, 1, 2, 3));
+  }
+};
+
+// TODO: untested
+// NOTE: 8x 32-bit float type. requires avx extensions (TODO: which versions?)
+struct R32x8
+{
+  using Scalar = R32x1;
+  static usz constexpr count = 8; // number of elements in vector
+  static usz constexpr size = 32; // size of vector in bytes
+
+  __m256 v;
+
+  R32x8() {}
+  explicit R32x8(__m256 x) : v(x) {}
+  explicit R32x8(r32 x) : v(_mm256_set1_ps(x)) {}
+
+  static R32x8 zero(void) { return(R32x8(_mm256_setzero_ps())); }
+  static R32x8 neg1(void) { return(R32x8(-1.f)); }
+
+  static R32x8 load(r32 const *src) { return(R32x8(_mm256_loadu_ps(src))); }
+  void store(r32 *dest) { _mm256_storeu_ps(dest, v); }
+
+  R32x8 operator+(R32x8 b) { return(R32x8(_mm256_add_ps(v, b.v))); }
+  R32x8 operator-(R32x8 b) { return(R32x8(_mm256_sub_ps(v, b.v))); }
+  R32x8 operator*(R32x8 b) { return(R32x8(_mm256_mul_ps(v, b.v))); }
+
+  static FORCE_INLINE void
+  load_deinterleave(R32x8 &re, R32x8 &im, r32 const *src)
+  {
+    __m256 const t0 = _mm256_loadu_ps(src);
+    __m256 const t1 = _mm256_loadu_ps(src + count);
+
+    __m256 const s0 = _mm256_permute2f128_ps(t0, t1, 0x20);
+    __m256 const s1 = _mm256_permute2f128_ps(t0, t1, 0x31);
+
+    re.v = _mm256_shuffle_ps(s0, s1, _MM_SHUFFLE(2, 0, 2, 0));
+    im.v = _mm256_shuffle_ps(s0, s1, _MM_SHUFFLE(3, 1, 3, 1));
+  }
+
+  static FORCE_INLINE void
+  store_interleaved(r32 *dest, R32x8 re, R32x8 im)
+  {
+    __m256 const t0 = _mm256_unpacklo_ps(re.v, im.v);
+    __m256 const t1 = _mm256_unpackhi_ps(re.v, im.v);
+
+    // s0[127:0]   = t0[127:0]
+    // s0[255:128] = t1[127:0]
+    // s1[127:0]   = t0[255:128]
+    // s2[255:128] = t1[255:128];
+    __m256 const s0 = _mm256_permute2f128_ps(t0, t1, 0x20);
+    __m256 const s1 = _mm256_permute2f128_ps(t0, t1, 0x31);
+
+    _mm256_storeu_ps(dest, s0);
+    _mm256_storeu_ps(dest + count, s1);
+  }
+
+  static FORCE_INLINE void
+  transpose8x8(R32x8 &a, R32x8 &b, R32x8 &c, R32x8 &d,
+	       R32x8 &e, R32x8 &f, R32x8 &g, R32x8 &h)
+  {
+    __m256 t0 = _mm256_unpacklo_ps(a.v, b.v);
+    __m256 t1 = _mm256_unpackhi_ps(a.v, b.v);
+    __m256 t2 = _mm256_unpacklo_ps(c.v, d.v);
+    __m256 t3 = _mm256_unpackhi_ps(c.v, d.v);
+    __m256 t4 = _mm256_unpacklo_ps(e.v, f.v);
+    __m256 t5 = _mm256_unpackhi_ps(e.v, f.v);
+    __m256 t6 = _mm256_unpacklo_ps(g.v, h.v);
+    __m256 t7 = _mm256_unpackhi_ps(g.v, h.v);
+
+    __m256 s0 = _mm256_shuffle_ps(t0, t2, _MM_SHUFFLE(1, 0, 1, 0));
+    __m256 s1 = _mm256_shuffle_ps(t0, t2, _MM_SHUFFLE(3, 2, 3, 2));
+    __m256 s2 = _mm256_shuffle_ps(t1, t3, _MM_SHUFFLE(1, 0, 1, 0));
+    __m256 s3 = _mm256_shuffle_ps(t1, t3, _MM_SHUFFLE(3, 2, 3, 2));
+    __m256 s4 = _mm256_shuffle_ps(t4, t6, _MM_SHUFFLE(1, 0, 1, 0));
+    __m256 s5 = _mm256_shuffle_ps(t4, t6, _MM_SHUFFLE(3, 2, 3, 2));
+    __m256 s6 = _mm256_shuffle_ps(t5, t7, _MM_SHUFFLE(1, 0, 1, 0));
+    __m256 s7 = _mm256_shuffle_ps(t5, t7, _MM_SHUFFLE(3, 2, 3, 2));
+
+    a.v = _mm256_permute2f128_ps(s0, s4, 0x20);
+    b.v = _mm256_permute2f128_ps(s1, s5, 0x20);
+    c.v = _mm256_permute2f128_ps(s2, s6, 0x20);
+    d.v = _mm256_permute2f128_ps(s3, s7, 0x20);
+    e.v = _mm256_permute2f128_ps(s0, s4, 0x31);
+    f.v = _mm256_permute2f128_ps(s1, s5, 0x31);
+    g.v = _mm256_permute2f128_ps(s2, s6, 0x31);
+    h.v = _mm256_permute2f128_ps(s3, s7, 0x31);
+  }
+
+  static FORCE_INLINE void
+  reverse(R32x8 &a)
+  {
+    __m256 t = _mm256_shuffle_ps(a.v, a.v, _MM_SHUFFLE(0, 1, 2, 3));
+    a.v = _mm256_permute2f128_ps(t, t, 0x31);
+  }
+};
+
+#elif ARCH_ARM || ARCH_ARM64
+
+// TODO: neon intrinsics
+
+#elif ARCH_WASM
+
+// TODO: wasm intrinsics
+
+#else
+#  warning vector instructions not supported for this architecture
+#endif
+
 union WideFloat;
 union WideInt;
 
