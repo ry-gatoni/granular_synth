@@ -104,10 +104,34 @@ static r32 twiddle_table__radix_2[4*MAX_FFT_COUNT] = {};
 static void
 fftInitTwiddleTables(void)
 {
-  for(usz n = 1; n <= MAX_FFT_COUNT; n *= 2)
+  for(usz n = 2; n <= MAX_FFT_COUNT; n *= 2)
   {
     r64 step = GS_TAU / (r64)(2*n);
     r32 *twiddles = twiddle_table__radix_2 + 2*n;
+#if 1
+    for(usz k = 0; k < n; ++k)
+    {
+      r64 phase = step * (r64)k;
+      r32 sine = gsSin((r32)phase);
+      twiddles[k] = sine;
+    }
+
+    twiddles += n/2;
+    for(usz k = 0; k < n; ++k)
+    {
+      r64 phase = step * (r64)k;
+      r32 cosine = gsCos((r32)phase);
+      twiddles[k] = cosine;
+    }
+
+    twiddles += n/2;
+    for(usz k = 0; k < n; ++k)
+    {
+      r64 phase = step * (r64)k;
+      r32 sine = gsSin((r32)phase);
+      twiddles[k] = -sine;
+    }
+#else
     for(usz k = 0; k < 2*n; ++k)
     {
       r64 phase = step * (r64)k;
@@ -115,6 +139,7 @@ fftInitTwiddleTables(void)
       //twiddles[k] = C64Polar(1, phase);
       twiddles[k] = sine;
     }
+#endif
   }
 }
 
@@ -335,7 +360,7 @@ fft_real_convert__radix_2(c64 *io, usz real_count)
     if(dir == FftDirection_forward) // NOTE: -sine for forward transform
     { twiddles_im += m; }
 
-    for(usz k = T::count; k < m/2; k += T::count) // TODO: mask?
+    for(usz k = T::count; k < m/2; k += T::count)
     {
       // NOTE: extract even and odd parts of
       // io[k] = x_e[k] + i*x_o[k].

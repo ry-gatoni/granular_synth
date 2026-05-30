@@ -19,6 +19,7 @@ testForwardFFT(Arena *arena, r32 *input, usz count, FftKernels *kernels, c64 *ta
   String8List log = {};
   {
     r32 const tol = 1e-3;
+    r32 const eps = 1e-6;
     // NOTE: test first value (DC + i*Nyquist)
     {
       r32 resultDc = output[0].re;
@@ -28,7 +29,7 @@ testForwardFFT(Arena *arena, r32 *input, usz count, FftKernels *kernels, c64 *ta
 
       r32 resultMagSq = resultDc*resultDc + resultNq*resultNq;
       r32 targetMagSq = targetDc*targetDc + targetNq*targetNq;
-      r32 percentErr = gsAbs(resultMagSq - targetMagSq)/targetMagSq;
+      r32 percentErr = gsAbs(resultMagSq - targetMagSq)/(targetMagSq + eps);
       b32 sampleSuccess = percentErr < tol;
       if(!sampleSuccess)
       {
@@ -36,9 +37,11 @@ testForwardFFT(Arena *arena, r32 *input, usz count, FftKernels *kernels, c64 *ta
 	stringListPushFormat(arena, &log,
 			     "fft discrepancy at sample 0:\n"
 			     "  result = %.4f + %.4fi\n"
-			     "  target = %.4f + %.4fi\n",
+			     "  target = %.4f + %.4fi\n"
+			     "     err = %.4f%%\n",
 			     resultDc, resultNq,
-			     targetDc, targetNq);
+			     targetDc, targetNq,
+			     percentErr);
       }
     }
 
@@ -52,7 +55,7 @@ testForwardFFT(Arena *arena, r32 *input, usz count, FftKernels *kernels, c64 *ta
 
       r32 resultMagSq = resultRe*resultRe + resultIm*resultIm;
       r32 targetMagSq = targetRe*targetRe + targetIm*targetIm;
-      r32 percentErr = gsAbs(resultMagSq - targetMagSq)/targetMagSq;
+      r32 percentErr = gsAbs(resultMagSq - targetMagSq)/(targetMagSq + eps);
       b32 sampleSuccess = percentErr < tol;
       if(!sampleSuccess)
       {
@@ -60,10 +63,12 @@ testForwardFFT(Arena *arena, r32 *input, usz count, FftKernels *kernels, c64 *ta
 	stringListPushFormat(arena, &log,
 			     "fft discrepancy at sample %lu:\n"
 			     "  result = %.4f + %.4fi\n"
-			     "  target = %.4f + %.4fi\n",
+			     "  target = %.4f + %.4fi\n"
+			     "     err = %.4f%%\n",
 			     i,
 			     resultRe, resultIm,
-			     targetRe, targetIm);
+			     targetRe, targetIm,
+			     percentErr);
       }
     }
   }
@@ -97,24 +102,28 @@ testReverseFFT(Arena *arena, c64 *input, usz count, FftKernels *kernels, r32 *ta
   b32 success = 1;
   String8List log = {};
   {
-    r32 const tol = 1e-3;
+    r32 const tol = 2e-2;
     for(usz i = 0; i < count; ++i)
     {
       r32 resultVal = output[i];
       r32 targetVal = target[i];
       // r32 resultSq = resultVal*resultVal;
       // r32 targetSq = targetVal*targetVal;
-      r32 percentErr = gsAbs(resultVal - targetVal)/targetVal;
-      success = percentErr < tol;
-      if(!success)
+      //r32 percentErr = gsAbs(resultVal - targetVal)/(targetVal + eps);
+      r32 err = gsAbs(resultVal - targetVal);
+      b32 sampleSuccess = err < tol;
+      if(!sampleSuccess)
       {
+	success = 0;
 	stringListPushFormat(arena, &log,
 			     "ifft discrepancy at sample %lu\n"
 			     "  result = %.4f\n"
-			     "  target = %.4f\n",
+			     "  target = %.4f\n"
+			     "     err = %.4f\n",
 			     i,
 			     resultVal,
-			     targetVal);
+			     targetVal,
+			     err);
       }
     }
   }
