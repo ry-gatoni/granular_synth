@@ -202,7 +202,72 @@ struct R32x8
 
 #elif ARCH_ARM || ARCH_ARM64
 
-// TODO: neon intrinsics
+#include <arm_neon.h>
+
+struct R32x4
+{
+  using Scalar = R32x1;
+  static usz constexpr count = 4; // number of elements in vector
+  static usz constexpr size = 16; // size of vector in bytes
+
+  float32x4_t v;
+
+  R32x4() {}
+  explicit R32x4(float32x4_t x) : v(x) {}
+  explicit R32x4(r32 x) : v(vdupq_n_f32(x)) {}
+
+  static R32x4 zero(void) { return R32x4(0.f); }
+  static R32x4 neg1(void) { return R32x4(-1.f); }
+
+  static R32x4 load(r32 const *src) { return R32x4(vld1q_f32(src)); }
+  void store(r32 *dest) { vst1q_f32(dest, v); }
+
+  R32x4 operator+(R32x4 b) { return R32x4(vaddq_f32(v, b.v)); }
+  R32x4 operator-(R32x4 b) { return R32x4(vsubq_f32(v, b.v)); }
+  R32x4 operator*(R32x4 b) { return R32x4(vmulq_f32(v, b.v)); }
+
+  static FORCE_INLINE void
+  load_deinterleave(R32x4 &re, R32x4 &im, r32 const *src)
+  {
+    float32x4_t const t0 = vld1q_f32(src);
+    float32x4_t const t1 = vld1q_f32(src + count);
+
+    float32x4x2_t const res = vuzpq_f32(t0, t1);
+    re.v = res.val[0];
+    im.v = res.val[1];
+  }
+
+  static FORCE_INLINE void
+  store_interleaved(r32 *dest, R32x4 re, R32x4 im)
+  {
+    float32x4x2_t const s = vzipq_f32(re.v, im.v);
+
+    vst1q_f32(dest, s.val[0]);
+    vst1q_f32(dest + count, s.val[1]);
+  }
+
+  static FORCE_INLINE void
+  transpose4x4(R32x4 &a, R32x4 &b, R32x4 &c, R32x4 &d)
+  {
+    float32x4x2_t const t_02 = vzipq_f32(a.v, c.v);
+    float32x4x2_t const t_13 = vzipq_f32(b.v, d.v);
+
+    float32x4x2_t const s_01 = vzipq_f32(t_02.val[0], t_13.val[0]);
+    float32x4x2_t const s_23 = vzipq_f32(t_02.val[1], t_13.val[1]);
+
+    a.v = s_01.val[0];
+    b.v = s_01.val[1];
+    c.v = s_23.val[0];
+    d.v = s_23.val[1];
+  }
+
+  static FORCE_INLINE void
+  reverse(R32x4 &a)
+  {
+    float32x4_t const t = vrev64q_f32(a.v);
+    a.v = vcombine_f32(vget_high_f32(t), vget_low_f32(t));
+  }
+};
 
 #elif ARCH_WASM
 
