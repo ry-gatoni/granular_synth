@@ -40,7 +40,13 @@
 #if COMPILER_MSVC
 #  define SECTION(name) __declspec(allocate(name))
 #elif COMPILER_CLANG || COMPILER_GCC
-#  define SECTION(name) __attribute__((section(name), used, aligned(1)))
+#  if OS_LINUX
+#    define SECTION(name) __attribute__((section(name), used, aligned(1)))
+#  elif OS_MAC
+#    define SECTION(name) __attribute__((section("__DATA," name), used, aligned(1)))
+#  else
+#    error SECTION not supported on this os
+#  endif
 #else
 #  error SECTION not supported on this compiler
 #endif

@@ -32,6 +32,8 @@ onnx_build_debug.txt
 
 sw.js
 
+**/.DS_Store
+
 # ignore emacs turds
 *.*~
 \#*\#

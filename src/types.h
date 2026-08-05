@@ -7,7 +7,14 @@ typedef uint8_t  u8;
 typedef uint16_t u16;
 typedef uint32_t u32;
 typedef uint64_t u64;
-typedef size_t   usz;
+//typedef size_t   usz;
+#if ARCH_32BIT
+typedef u32 usz;
+#elif ARCH_64BIT
+typedef u64 usz;
+#else
+#  error usz not defined for this architecture
+#endif
 
 typedef int8_t   s8;
 typedef int16_t  s16;

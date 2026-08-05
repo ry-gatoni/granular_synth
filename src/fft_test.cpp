@@ -178,6 +178,7 @@ struct FFT_TestResult
   String8List log;
 };
 
+#if 0
 static FFT_TestResult
 testFFTFunction(Arena *arena, FFT_Function *fft, FloatBuffer input, ComplexBuffer target)
 {
@@ -272,6 +273,7 @@ testIFFTFunction(Arena *arena, IFFT_Function *ifft, ComplexBuffer input, FloatBu
   result.log = log;
   return(result);
 }
+#endif
 
 #if 0
 static bool

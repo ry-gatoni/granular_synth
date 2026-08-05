@@ -28,8 +28,13 @@ struct Tester
 #  define TEST_Sym_First GLUE(__start_, TEST_Sym_Marker)
 #  define TEST_Sym_Last GLUE(__stop_, TEST_Sym_Marker)
 // TODO: test on mac
+#if OS_MAC
+extern TEST_Sym_Type TEST_Sym_First[] asm("section$start$__DATA$" STRINGIFY(TEST_Sym_Marker));
+extern TEST_Sym_Type TEST_Sym_Last[] asm("section$end$__DATA$" STRINGIFY(TEST_Sym_Marker));
+#elif OS_LINUX
 extern TEST_Sym_Type TEST_Sym_First[];
 extern TEST_Sym_Type TEST_Sym_Last[];
+#endif
 static usz testGetCount(void) { return(INT_FROM_PTR(TEST_Sym_Last - TEST_Sym_First)); }
 static TEST_Sym_Type* testGetFirst(void) { return(TEST_Sym_First); }
 #else

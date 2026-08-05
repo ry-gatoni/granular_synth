@@ -669,18 +669,58 @@ platformFreeRingBufferMemory(void *memory, usz size)
 
 #elif OS_MAC
 
-#error TODO: ring buffer alloc/free
+#include <mach/mach.h>
+#include "mach/mach_vm.h"
 
 static void*
-platformAllocateRingBufferMemory(usz size)
+platformAllocateRingBufferMemory(usz* sizeIO)
 {
+  kern_return_t status = 0;
 
+  usz minSize = *sizeIO;
+  mach_port_t task = mach_task_self();
+  mach_vm_address_t addr = 0;
+  mach_port_t port = 0;
+  mach_vm_size_t imageSize = ROUND_UP_POW_2(mach_vm_round_page(minSize));
+  mach_vm_size_t totalAllocSize = 2*imageSize;
+
+  vm_prot_t pageProt = VM_PROT_READ|VM_PROT_WRITE;
+  mach_vm_address_t image0 = 0, image1 = 0;
+
+  // NOTE: allocate memory for all mapped images
+  status = mach_vm_allocate(task, &addr, totalAllocSize, VM_FLAGS_ANYWHERE);
+  if(status != 0 || addr == 0) goto rb_alloc_failure;
+
+  // NOTE: map first image to base of the memory allocation
+  image0 = addr;
+  status = mach_vm_allocate(task, &image0, imageSize, VM_FLAGS_FIXED|VM_FLAGS_OVERWRITE);
+  if(status != 0 || image0 == 0) goto rb_alloc_failure;
+
+  // NOTE: create port for the mapping
+  status = mach_make_memory_entry_64(task, &imageSize, addr, pageProt, &port, MACH_PORT_NULL);
+  if(status != 0) goto rb_alloc_failure;
+
+  // NOTE: map second image
+  image1 = addr + imageSize;
+  status = mach_vm_map(task, &image1, imageSize, 0, VM_FLAGS_FIXED|VM_FLAGS_OVERWRITE, port, 0, FALSE, pageProt, pageProt, VM_INHERIT_NONE);
+  if(status != 0 || image1 == 0) goto rb_alloc_failure;
+
+  mach_port_deallocate(task, port);
+
+  *sizeIO = imageSize;
+  return (void*)addr;
+
+rb_alloc_failure:
+  if(port) mach_port_deallocate(task, port);
+  if(addr) mach_vm_deallocate(task, addr, totalAllocSize);
+  *sizeIO = 0;
+  return 0;
 }
 
 static void
 platformFreeRingBufferMemory(void *memory, usz size)
 {
-
+  mach_vm_deallocate(mach_task_self(), (mach_vm_address_t)memory, 2*size);
 }
 
 #endif

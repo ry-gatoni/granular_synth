@@ -27,6 +27,7 @@ testRunAll(void)
   arenaReleaseScratch(scratch);
 }
 
+#if 0
 static void
 testRun(void)
 {
@@ -107,3 +108,4 @@ testRun(void)
 
   arenaReleaseScratch(scratch);
 }
+#endif

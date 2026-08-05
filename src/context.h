@@ -125,6 +125,19 @@
 # define ARCH_WASM64 0
 #endif
 
+#if ARCH_X86 || ARCH_ARM || ARCH_WASM32
+# define ARCH_32BIT 1
+#elif ARCH_X64 || ARCH_ARM64 || ARCH_WASM64
+# define ARCH_64BIT 1
+#endif
+
+#if !defined(ARCH_32BIT)
+# define ARCH_32BIT 0
+#endif
+#if !defined(ARCH_64BIT)
+# define ARCH_64BIT 0
+#endif
+
 // NOTE: language
 #if defined(__cplusplus)
 # define LANG_CPP 1
