@@ -74,13 +74,12 @@ struct AudioRingBufferView
 };
 
 static inline AudioRingBufferView
-rbGetReadableView(AudioRingBuffer *rb)
+rbGetReadView(AudioRingBuffer *rb)
 {
   u64 readIndexWrapped = (rb->readIndex & (rb->sampleCount - 1));
   u64 sampleCount = rb->writeIndex - rb->readIndex;
   r32 *startL = rb->samples[0] + readIndexWrapped;
   r32 *startR = rb->samples[1] + readIndexWrapped;
-  rb->readIndex += sampleCount;
 
   AudioRingBufferView result = {};
   result.start[0] = startL;
@@ -89,12 +88,18 @@ rbGetReadableView(AudioRingBuffer *rb)
   return(result);
 }
 
+static inline void
+rbEndRead(AudioRingBuffer *rb, usz samplesRead)
+{
+  ASSERT(rb->readIndex + samplesRead <= rb->writeIndex);
+  rb->readIndex += samplesRead;
+}
+
 static inline AudioRingBufferView
-rbGetWritableView(AudioRingBuffer *rb, u64 sampleCount)
+rbGetWriteView(AudioRingBuffer *rb)
 {
   u64 writeIndexWrapped = (rb->writeIndex & (rb->sampleCount - 1));
-  u64 samplesAvailable = rb->sampleCount + rb->readIndex - rb->writeIndex;
-  sampleCount = MIN(sampleCount, samplesAvailable);
+  u64 sampleCount = rb->sampleCount + rb->readIndex - rb->writeIndex;
 
   r32 *startL = rb->samples[0] + writeIndexWrapped;
   r32 *startR = rb->samples[1] + writeIndexWrapped;
@@ -109,34 +114,30 @@ rbGetWritableView(AudioRingBuffer *rb, u64 sampleCount)
 }
 
 static inline void
-rbCommitWrite(AudioRingBuffer *rb, AudioRingBufferView view)
+rbEndWrite(AudioRingBuffer *rb, usz samplesWritten)
 {
-  u64 samplesWritten = view.sampleCount;
   if(!rb->isMagic)
   {
-    u64 startIndexL = INT_FROM_PTR(view.start[0] - rb->samples[0]);
-    u64 startIndexR = INT_FROM_PTR(view.start[1] - rb->samples[1]);
-    ASSERT(startIndexL == startIndexR);
-    u64 startIndex = startIndexL;
+    u64 startIndex = (rb->writeIndex & (rb->sampleCount - 1));
     u64 samplesToBufferEnd = rb->sampleCount - startIndex;
-    u64 samplesToWrite = MIN(samplesWritten, samplesToBufferEnd);
+    u64 samplesToCopy = MIN(samplesWritten, samplesToBufferEnd);
 
-    r32 *srcL = view.start[0];
-    r32 *srcR = view.start[1];
-    r32 *destL = rb->samples[0];
-    r32 *destR = rb->samples[1];
-    COPY_ARRAY(destL, srcL, samplesToWrite, r32);
-    COPY_ARRAY(destR, srcR, samplesToWrite, r32);
+    r32 *srcL = rb->samples[0] + startIndex;
+    r32 *srcR = rb->samples[1] + startIndex;
+    r32 *destL = srcL + rb->sampleCount;
+    r32 *destR = srcR + rb->sampleCount;
+    COPY_ARRAY(destL, srcL, samplesToCopy, r32);
+    COPY_ARRAY(destR, srcR, samplesToCopy, r32);
 
-    if(samplesToWrite < samplesWritten)
+    if(samplesToCopy < samplesWritten)
     {
-      samplesToWrite = samplesWritten - samplesToWrite;
-      srcL = view.start[0] + samplesToWrite;
-      srcR = view.start[1] + samplesToWrite;
+      samplesToCopy = samplesWritten - samplesToCopy;
+      srcL = rb->samples[0] + rb->sampleCount;
+      srcR = rb->samples[1] + rb->sampleCount;
       destL = rb->samples[0];
       destR = rb->samples[1];
-      COPY_ARRAY(destL, srcL, samplesToWrite, r32);
-      COPY_ARRAY(destR, srcR, samplesToWrite, r32);
+      COPY_ARRAY(destL, srcL, samplesToCopy, r32);
+      COPY_ARRAY(destR, srcR, samplesToCopy, r32);
     }
   }
   rb->writeIndex += samplesWritten;

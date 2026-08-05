@@ -1687,7 +1687,7 @@ struct PVStream
 };
 
 // TODO: is using `SamplePair` actually better if we end up needing to vectorize each channel?
-
+#if 0
 static void
 pvProcess(BufferStream *stream)
 {
@@ -1727,6 +1727,7 @@ pvProcess(BufferStream *stream)
   stream->start = stream->at;
   stream->end = (u8*)(inputSamples + pvStream->windowSampleCount);
 }
+#endif
 
 struct PVOutputStream
 {
@@ -1759,14 +1760,13 @@ pvOutput(AudioBufferStream *stream)
     u64 availableReadSamples = pvSource->sampleCount;
 
     // TODO: this logic might be wrong
-    AudioRingBufferView destSamples = rbGetWritableView(rb, availableReadSamples);
+    AudioRingBufferView destSamples = rbGetWriteView(rb);
     u64 availableWriteSamples = destSamples.sampleCount;
     u64 samplesToWrite = MIN(availableReadSamples, availableWriteSamples);
     COPY_ARRAY(destSamples.start[0], srcL, samplesToWrite, r32);
     COPY_ARRAY(destSamples.start[1], srcR, samplesToWrite, r32);
 
-    destSamples.sampleCount = synthesisHopSize;
-    rbCommitWrite(rb, destSamples);
+    rbEndWrite(rb, synthesisHopSize);
     pvSource->sampleCursor += samplesToWrite;
   }
 
@@ -1930,19 +1930,19 @@ mixOutputSamples(AudioBufferStream *stream)
 static void
 mixInputSamples(AudioBufferStream *stream)
 {
-  ASSERT(stream->sampleCursor == stream->sampleCount);
-
   InputMixStream *mix = (InputMixStream*)stream;
 
   AudioRingBuffer *destBuffer = mix->inputBuffer;
-
   PluginAudioBuffer *audioBuffer = mix->audioBuffer;
   PluginState *pluginState = mix->pluginState;
+
+  ASSERT(stream->sampleCursor == stream->sampleCount);
+  rbEndRead(destBuffer, stream->sampleCount);
 
   u32 framesToRead = audioBuffer->framesToWrite;
   logFormatString("samples to read: %lu", framesToRead);
 
-  AudioRingBufferView destSamples = rbGetWritableView(destBuffer, framesToRead);
+  AudioRingBufferView destSamples = rbGetWriteView(destBuffer);
   ASSERT(destSamples.sampleCount >= framesToRead);
 
   const void *genericInputFrames[2] = {};
@@ -2036,11 +2036,10 @@ mixInputSamples(AudioBufferStream *stream)
     }
   }
 
-  destSamples.sampleCount = framesToRead;
-  rbCommitWrite(destBuffer, destSamples);
+  rbEndWrite(destBuffer, framesToRead);
 
   // NOTE: expose pointers
-  AudioRingBufferView readSamples = rbGetReadableView(destBuffer);
+  AudioRingBufferView readSamples = rbGetReadView(destBuffer);
   stream->startSamples[0] = readSamples.start[0];
   stream->startSamples[1] = readSamples.start[1];
   stream->sampleCursor = 0;
