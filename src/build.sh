@@ -122,7 +122,7 @@ fi
 SRC_DIR=$PWD
 DATA_DIR=$SRC_DIR/../data
 
-CFLAGS="-Wall -Wextra -Wshadow -Wno-writable-strings -Wno-missing-braces -Wno-unused-function -Wno-unused-local-typedef"
+CFLAGS="-Wall -Wextra -Wshadow -Wno-writable-strings -Wno-missing-braces -Wno-unused-function -Wno-unused-local-typedef -ferror-limit=0"
 if [[ $config_debug == 1 ]]; then
     CFLAGS+=" -g"
 else
@@ -141,11 +141,12 @@ LINUX_PLUGIN_FLAGS="-shared -fPIC"
 
 if [[ "$(uname)" == "Linux"* ]]; then
     #CFLAGS+= " -Wl,rpath,'$ORIGIN/../lib' -Wl,--enable-new-dtags"
+    CFLAGS+=" -DCACHE_LINE_SIZE=$(getconf LEVEL1_DCACHE_LINESIZE)"
     GL_FLAGS=$LINUX_GL_FLAGS
     PLUGIN_NAME="plugin.so"
     PLUGIN_FLAGS=$LINUX_PLUGIN_FLAGS
 elif [[ "$(uname)" == "Darwin" ]]; then
-    CFLAGS+=" -Wno-deprecated-declarations"
+    CFLAGS+=" -Wno-deprecated-declarations -DCACHE_LINE_SIZE=$(sysctl -n hw.cachelinesize)"
     GL_FLAGS=$MAC_GL_FLAGS
     PLUGIN_NAME="plugin.dylib"
     PLUGIN_FLAGS=$MAC_PLUGIN_FLAGS

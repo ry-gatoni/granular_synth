@@ -369,7 +369,8 @@ struct PluginState
   AudioRingBuffer grainViewBuffer;
 
   GrainManager grainManager;
-  GrainStateView grainStateView;
+  GrainStateViewBuffer grainStateViewBuffer;
+  GrainStateView grainStateViews[3];
 
   LoadedGrainPackfile loadedGrainPackfile;
   FileGrainState silo;

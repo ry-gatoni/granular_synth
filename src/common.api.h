@@ -25,6 +25,8 @@
   X(AtomicLoadPointer, void*, (volatile void **src))\
   X(AtomicStore, u32, (volatile u32 *dest, u32 value))\
   X(AtomicAdd, u32, (volatile u32 *addend, u32 value))\
+  X(AtomicExchange, u32, (u32 volatile *dest, u32 src))\
+  X(AtomicExchangePointers, void*, (void *volatile *dest, void *src))\
   X(AtomicCompareAndSwap, u32, (volatile u32 *value, u32 oldValue, u32 newVal))\
   X(AtomicCompareAndSwapPointers, void*, (volatile void **value, void *oldVal, void *newVal))
 

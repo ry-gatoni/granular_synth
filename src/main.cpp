@@ -516,6 +516,13 @@ main(int argc, char **argv)
       pluginMemory.osTimerFreq = getOSTimerFreq();
       pluginMemory.host = PluginHost_executable;
 
+      // TODO: use xlist for assigning shared functions pointers, so we get
+      // compilation errors when adding new functions to the shared api without
+      // implementing them in the host. requires naming discipline (platform vs gs prefix?)
+
+/* #define X(name, ret, args) GLUE(pluginMemory.platformAPI.gs, name) = GLUE(platform, name); */
+/*    PLATFORM_API_XLIST;                                                                     */
+/* #undef X                                                                                   */
       pluginMemory.platformAPI.gsReadEntireFile  = platformReadEntireFile;
       pluginMemory.platformAPI.gsFreeFileMemory  = platformFreeFileMemory;
       pluginMemory.platformAPI.gsWriteEntireFile = platformWriteEntireFile;
@@ -544,6 +551,8 @@ main(int argc, char **argv)
       pluginMemory.platformAPI.gsAtomicLoad                   = atomicLoad;
       pluginMemory.platformAPI.gsAtomicStore                  = atomicStore;
       pluginMemory.platformAPI.gsAtomicAdd                    = atomicAdd;
+      pluginMemory.platformAPI.gsAtomicExchange               = atomicExchange;
+      pluginMemory.platformAPI.gsAtomicExchangePointers       = atomicExchangePointers;
       pluginMemory.platformAPI.gsAtomicCompareAndSwap         = atomicCompareAndSwap;
       pluginMemory.platformAPI.gsAtomicCompareAndSwapPointers = atomicCompareAndSwapPointers;
 

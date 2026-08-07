@@ -761,6 +761,18 @@ atomicAdd(volatile u32 *addend, u32 value)
 }
 
 static u32
+atomicExchange(u32 volatile *dest, u32 src)
+{
+  return __atomic_exchange_n(dest, src, __ATOMIC_ACQ_REL);
+}
+
+static void*
+atomicExchangePointers(void *volatile *dest, void *src)
+{
+  return __atomic_exchange_n(dest, src, __ATOMIC_ACQ_REL);
+}
+
+static u32
 atomicCompareAndSwap(volatile u32 *value, u32 oldval, u32 newval)
 {
   u32 *expectedPtr = &oldval;

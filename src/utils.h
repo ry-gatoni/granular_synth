@@ -51,6 +51,16 @@
 #  error SECTION not supported on this compiler
 #endif
 
+#if COMPILER_CLANG || COMPILER_GCC
+#  define ALIGN_FIELD(n) __attribute__((aligned(n)))
+#elif COMPILER_MSVC
+#  define ALIGN_FIELD(n) __declspec(align(n))
+#else
+#  define ALIGN_FIELD(n)
+#  warning `ALIGN_FIELD()` not defined on this compiler
+#endif
+#define CACHE_ALIGN_FIELD ALIGN_FIELD(CACHE_LINE_SIZE)
+
 #define STATEMENT(a) do { a } while(0)
 #define STRINGIFY_(a) #a
 #define STRINGIFY(a) STRINGIFY_(a)

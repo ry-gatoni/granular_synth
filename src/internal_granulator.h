@@ -18,30 +18,30 @@ struct Grain
   b32 isFinished;
 };
 
-struct GrainViewEntry
+struct GrainView
 {
   u32 startIndex;
   u32 endIndex;
 };
 
-struct GrainBufferViewEntry
-{
-  u32 bufferReadIndex;
-  u32 bufferWriteIndex;
-
-  u32 grainCount;
-  GrainViewEntry grainViews[32];
-};
-
 struct GrainStateView
 {
-  u32 viewReadIndex;
-  u32 viewWriteIndex;
-  volatile u32 entriesQueued;
+  r32 *samples[2];
+  u32 sampleCount;
 
-  GrainBufferViewEntry views[32];
+  u32 readIndex;
+  u32 writeIndex;
 
-  AudioRingBuffer *viewBuffer;
+  u32 grainCount;
+  GrainView grainViews[32];
+};
+
+#define PENDING_WRITE_POINTER_TAG_BIT 1ULL
+struct GrainStateViewBuffer
+{
+  CACHE_ALIGN_FIELD GrainStateView *volatile read;
+  CACHE_ALIGN_FIELD GrainStateView *volatile write;
+  CACHE_ALIGN_FIELD GrainStateView *volatile shared;
 };
 
 struct GrainManager
@@ -53,7 +53,7 @@ struct GrainManager
 
   PluginFloatParameter *parameters;
 
-  GrainStateView *grainStateView;
+  GrainStateViewBuffer *grainStateViewBuffer;
 
   u32 grainCount;
   Grain *firstPlayingGrain;
@@ -71,7 +71,49 @@ struct GrainManager
 
 // NOTE: functions
 
+static inline void
+enqueueGrainStateView(GrainManager *grainManager)
+{
+  GrainStateViewBuffer *viewBuffer = grainManager->grainStateViewBuffer;
+
+  GrainStateView *write = viewBuffer->write;
+  AudioRingBuffer *grainBuffer = grainManager->internalBuffer;
+  COPY_ARRAY(write->samples[0], grainBuffer->samples[0], grainBuffer->sampleCount, r32);
+  COPY_ARRAY(write->samples[1], grainBuffer->samples[1], grainBuffer->sampleCount, r32);
+  write->readIndex = grainBuffer->readIndex & (grainBuffer->sampleCount - 1);
+  write->writeIndex = grainBuffer->writeIndex & (grainBuffer->sampleCount - 1);
+  write->grainCount = grainManager->grainCount;
+
+  GrainView *grainView = &write->grainViews[0];
+  for(Grain *grain = grainManager->firstPlayingGrain; grain; grain = grain->next)
+  {
+    grainView->startIndex = grain->readIndex & (grainBuffer->sampleCount - 1);
+    grainView->endIndex = (grain->readIndex + grain->samplesToPlay) & (grainBuffer->sampleCount - 1);
+    ++grainView;
+  }
+
+  usz taggedWrite = INT_FROM_PTR(write)|PENDING_WRITE_POINTER_TAG_BIT;
+  void *shared = gsAtomicExchangePointers((void *volatile*)&viewBuffer->shared, PTR_FROM_INT(taggedWrite));
+  usz untaggedShared = INT_FROM_PTR(shared) & ~PENDING_WRITE_POINTER_TAG_BIT;
+  viewBuffer->write = (GrainStateView*)PTR_FROM_INT(untaggedShared);
+}
+
+static inline GrainStateView*
+dequeueGrainStateView(GrainManager *grainManager)
+{
+  GrainStateViewBuffer *viewBuffer = grainManager->grainStateViewBuffer;
+
+  if(INT_FROM_PTR(viewBuffer->shared) & PENDING_WRITE_POINTER_TAG_BIT)
+  {
+    void *shared = gsAtomicExchangePointers((void *volatile*)&viewBuffer->shared, viewBuffer->read);
+    usz untaggedShared = INT_FROM_PTR(shared) & ~PENDING_WRITE_POINTER_TAG_BIT;
+    viewBuffer->read = (GrainStateView*)PTR_FROM_INT(untaggedShared);
+  }
+
+  GrainStateView *result = viewBuffer->read;
+  return result;
+}
+
 static GrainManager initializeGrainManager(PluginState *pluginState);
-static void grainMakeViews(GrainManager *grainManager);
 static void synthesize(GrainManager* grainManager, AudioRingBufferView dest);
 static void grainManagerRefill(BufferStream *stream);

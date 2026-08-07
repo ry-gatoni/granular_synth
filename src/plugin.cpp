@@ -269,24 +269,16 @@ gsInitializePluginState(PluginMemory *memoryBlock)
       pluginState->grainManager = initializeGrainManager(pluginState);
 
       // NOTE: grain view initialization
-      GrainStateView *grainStateView = &pluginState->grainStateView;
-      //grainStateView->viewWriteIndex = 1;
-      grainStateView->viewBuffer = &pluginState->grainViewBuffer;
-      // grainStateView->viewBufferCount = pluginState->grainManager.grainBufferCount;
-      // grainStateView->viewBufferSamples =
-      //   arenaPushArray(pluginState->permanentArena, pluginState->grainManager.grainBufferCount,
-      //                  SamplePair, arenaFlagsNoZeroAlign(4*sizeof(SamplePair)));
-      // grainStateView->viewBufferReadIndex = 0;
-      // grainStateView->viewBufferWriteIndex = 1;
-
-      // u32 grainViewSampleCapacity = 4096;
-      // for(u32 i = 0; i < ARRAY_COUNT(grainStateView->views); ++i)
-      //   {
-      //     GrainBufferViewEntry *view = grainStateView->views + i;
-      //     view->sampleCapacity = grainViewSampleCapacity;
-      //     view->bufferSamples =
-      //       arenaPushArray(pluginState->permanentArena, grainViewSampleCapacity, SamplePair);
-      //   }
+      for(u32 viewIdx = 0; viewIdx < ARRAY_COUNT(pluginState->grainStateViews); ++viewIdx)
+      {
+	GrainStateView *view = &pluginState->grainStateViews[viewIdx];
+	view->sampleCount = pluginState->grainInputBuffer.sampleCount;
+	view->samples[0] = arenaPushArray(permanentArena, 2*view->sampleCount, r32);
+	view->samples[1] = view->samples[0] + view->sampleCount;
+      }
+      pluginState->grainStateViewBuffer.read = &pluginState->grainStateViews[0];
+      pluginState->grainStateViewBuffer.write = &pluginState->grainStateViews[1];
+      pluginState->grainStateViewBuffer.shared = &pluginState->grainStateViews[2];
 
       pluginState->inputStream.inputBuffer = &pluginState->inputBuffer;
 
@@ -1482,140 +1474,109 @@ gsRenderNewFrame(PluginMemory *memory, PluginInput *input, RenderCommands *rende
           v2 lowerRegionMiddle = lowerRegionMin + V2(0, 0.5f*regionDim.y);
           v2 upperRegionMiddle = upperRegionMin + V2(0, 0.5f*regionDim.y);
 
-          GrainStateView *grainStateView = &pluginState->grainStateView;
-          AudioRingBuffer *grainViewBuffer = grainStateView->viewBuffer;
-
-          // NOTE: we don't read from this buffer incrementally, so we move the
-          // read index up to the write index as if we did so that the
-          // invariants aren't violated. We don't really need the read index at
-          // all, but using the ring buffer let's us reuse some codepaths.
-          grainViewBuffer->readIndex = grainViewBuffer->writeIndex;
-
-          u32 grainBufferCapacity = grainViewBuffer->sampleCount;
-
-          u32 viewEntryReadIndex = grainStateView->viewReadIndex;
-          u32 entriesQueued = gsAtomicLoad(&grainStateView->entriesQueued);
-          logFormatString("entriesQueued: %u", entriesQueued);
-
-          for(u32 entryIndex = 0; entryIndex < entriesQueued; ++entryIndex)
-          {
-            GrainBufferViewEntry *view = (grainStateView->views +
-                                          ((viewEntryReadIndex + entryIndex) %
-                                           ARRAY_COUNT(grainStateView->views)));
-
-            u32 bufferReadIndex = view->bufferReadIndex;
-            u32 bufferWriteIndex = view->bufferWriteIndex;
-
-            // NOTE: display view read and write positions
-            r32 barThickness = 2.f;
-            u32 readIndex = bufferReadIndex;
-            r32 readPosition = (r32)readIndex/(r32)grainBufferCapacity;
-            r32 readBarPosition = readPosition*dim.x;
-            Rect2 readBar = rectMinDim(min + V2(readBarPosition, 0.f),
-                                       V2(barThickness, dim.y));
-            renderPushQuad(renderCommands, readBar, pluginState->null, 0.f,
-                           RENDER_LEVEL(grainViewMarker), V4(1, 0, 0, 1));
-
-            u32 writeIndex = bufferWriteIndex;
-            r32 writePosition = (r32)writeIndex/(r32)grainBufferCapacity;
-            r32 writeBarPosition = writePosition*dim.x;
-            Rect2 writeBar = rectMinDim(min + V2(writeBarPosition, 0.f),
-                                        V2(barThickness, dim.y));
-            renderPushQuad(renderCommands, writeBar, pluginState->null, 0.f,
-                           RENDER_LEVEL(grainViewMarker), V4(1, 1, 1, 1));
-
-            // NOTE: display playing grain start and end positions
-            v4 grainWindowColors[] =
-              {
-                //colorV4FromU32(0xFF4000FF),
-                colorV4FromU32(0xFF8000FF),
-                colorV4FromU32(0xFFBF00FF),
-                colorV4FromU32(0xFFFF00FF),
-
-                colorV4FromU32(0xBFFF00FF),
-                colorV4FromU32(0x80FF00FF),
-                colorV4FromU32(0x40FF00FF),
-                colorV4FromU32(0x00FF00FF),
-
-                colorV4FromU32(0x00FF40FF),
-                colorV4FromU32(0x00FF80FF),
-                colorV4FromU32(0x00FFBFFF),
-                colorV4FromU32(0x00FFFFFF),
-
-                colorV4FromU32(0x00BFFFFF),
-                colorV4FromU32(0x0080FFFF),
-                colorV4FromU32(0x0040FFFF),
-                colorV4FromU32(0x0000FFFF),
-
-                colorV4FromU32(0x4000FFFF),
-                colorV4FromU32(0x8000FFFF),
-                colorV4FromU32(0xBF00FFFF),
-                colorV4FromU32(0xFF00FFFF),
-
-                colorV4FromU32(0xFF00BFFF),
-                colorV4FromU32(0xFF0080FF),
-                //colorV4FromU32(0xFF0040FF),
-              };
-
-            for(u32 grainViewIndex = 0; grainViewIndex < view->grainCount; ++grainViewIndex)
-            {
-              GrainViewEntry *grainView = view->grainViews + grainViewIndex;
-              u32 grainStartIndex = grainView->startIndex;
-              u32 grainEndIndex = grainView->endIndex;
-              r32 grainStartPosition = (r32)grainStartIndex/(r32)grainBufferCapacity;
-              r32 grainEndPosition = (r32)grainEndIndex/(r32)grainBufferCapacity;
-              r32 grainStartBarPosition = grainStartPosition*dim.x;
-              r32 grainEndBarPosition = grainEndPosition*dim.x;
-
-              Rect2 grainStartBar = rectMinDim(min + V2(grainStartBarPosition, 0.f),
-                                               V2(barThickness, dim.y));
-              Rect2 grainEndBar = rectMinDim(min + V2(grainEndBarPosition, 0.f),
-                                             V2(barThickness, dim.y));
-
-              v4 grainWindowColor = grainWindowColors[grainViewIndex];
-              renderPushQuad(renderCommands, grainStartBar, pluginState->null, 0.f,
-                             RENDER_LEVEL(grainViewMarker), grainWindowColor);
-              renderPushQuad(renderCommands, grainEndBar, pluginState->null, 0.f,
-                             RENDER_LEVEL(grainViewMarker), grainWindowColor);
-            }
-          }
-
-	  v2 sampleBarOffsets[2] = {lowerRegionMiddle, upperRegionMiddle};
-
-          r32 samplesPerPixel = (r32)grainBufferCapacity/dim.x;
-          u32 widthInPixels = (u32)dim.x;
-	  for(u32 channelIdx = 0; channelIdx < ARRAY_COUNT(grainViewBuffer->samples); ++channelIdx)
+	  GrainStateView *view = dequeueGrainStateView(&pluginState->grainManager);
+	  // NOTE: draw from view
 	  {
-	    u32 lastSampleIndex = 0;
-	    for(u32 pixel = 0; pixel < widthInPixels; ++pixel)
+	    u32 bufferCapacity = view->sampleCount;
+	    u32 bufferReadIdx = view->readIndex;
+	    u32 bufferWriteIdx = view->writeIndex;
+
+	    // NOTE: draw buffer read/write position bars
+	    r32 const barThicknessPx = 2.f;
+
+	    r32 readBarPosX = ((r32)bufferReadIdx/(r32)bufferCapacity)*dim.x;
+	    Rect2 readBar = rectMinDim(min + V2(readBarPosX, 0),
+				       V2(barThicknessPx, dim.y));
+	    renderPushQuad(renderCommands, readBar, pluginState->null, 0.f,
+			   RENDER_LEVEL(grainViewMarker), V4(1, 0, 0, 1));
+
+	    r32 writeBarPosX = ((r32)bufferWriteIdx/(r32)bufferCapacity)*dim.x;
+	    Rect2 writeBar = rectMinDim(min + V2(writeBarPosX, 0),
+					V2(barThicknessPx, dim.y));
+	    renderPushQuad(renderCommands, writeBar, pluginState->null, 0.f,
+			   RENDER_LEVEL(grainViewMarker), V4(1, 1, 1, 1));
+
+	    // NOTE: draw start/end position bars for each grain
+	    v4 const grainColors[] = {
+	      //colorV4FromU32(0xFF4000FF),
+	      colorV4FromU32(0xFF8000FF),
+	      colorV4FromU32(0xFFBF00FF),
+	      colorV4FromU32(0xFFFF00FF),
+
+	      colorV4FromU32(0xBFFF00FF),
+	      colorV4FromU32(0x80FF00FF),
+	      colorV4FromU32(0x40FF00FF),
+	      colorV4FromU32(0x00FF00FF),
+
+	      colorV4FromU32(0x00FF40FF),
+	      colorV4FromU32(0x00FF80FF),
+	      colorV4FromU32(0x00FFBFFF),
+	      colorV4FromU32(0x00FFFFFF),
+
+	      colorV4FromU32(0x00BFFFFF),
+	      colorV4FromU32(0x0080FFFF),
+	      colorV4FromU32(0x0040FFFF),
+	      colorV4FromU32(0x0000FFFF),
+
+	      colorV4FromU32(0x4000FFFF),
+	      colorV4FromU32(0x8000FFFF),
+	      colorV4FromU32(0xBF00FFFF),
+	      colorV4FromU32(0xFF00FFFF),
+
+	      colorV4FromU32(0xFF00BFFF),
+	      colorV4FromU32(0xFF0080FF),
+	      //colorV4FromU32(0xFF0040FF),
+	    };
+
+	    for(u32 grainIdx = 0; grainIdx < view->grainCount; ++grainIdx)
 	    {
-	      r32 samplePosition = samplesPerPixel*pixel;
-	      u32 sampleIndex = (u32)samplePosition;
-	      r32 sample = 0.f;
-	      for(u32 i = lastSampleIndex; i < sampleIndex; ++i)
+	      GrainView *grainView = view->grainViews + grainIdx;
+	      u32 grainStartIdx = grainView->startIndex;
+	      u32 grainEndIdx = grainView->endIndex;
+
+	      v4 barColor = grainColors[grainIdx];
+
+	      r32 startBarPosX = ((r32)grainStartIdx/(r32)bufferCapacity)*dim.x;
+	      Rect2 startBar = rectMinDim(min + V2(startBarPosX, 0),
+					  V2(barThicknessPx, dim.y));
+	      renderPushQuad(renderCommands, startBar, pluginState->null, 0.f,
+			     RENDER_LEVEL(grainViewMarker), barColor);
+
+	      r32 endBarPosX = ((r32)grainEndIdx/(r32)bufferCapacity)*dim.x;
+	      Rect2 endBar = rectMinDim(min + V2(endBarPosX, 0),
+					V2(barThicknessPx, dim.y));
+	      renderPushQuad(renderCommands, endBar, pluginState->null, 0.f,
+			     RENDER_LEVEL(grainViewMarker), barColor);
+	    }
+
+	    // NOTE: draw samples
+	    v2 sampleBarOffsets[2] = {lowerRegionMiddle, upperRegionMiddle};
+
+	    r32 samplesPerPixel = (r32)bufferCapacity/dim.x;
+	    u32 widthInPixels = (u32)dim.x;
+	    for(u32 channelIdx = 0; channelIdx < ARRAY_COUNT(sampleBarOffsets); ++channelIdx)
+	    {
+	      u32 lastSampleIndex = 0;
+	      for(u32 pixel = 0; pixel < widthInPixels; ++pixel)
 	      {
-		sample += grainViewBuffer->samples[channelIdx][i];
+		r32 samplePosition = samplesPerPixel*pixel;
+		u32 sampleIndex = (u32)samplePosition;
+		r32 sample = 0.f;
+		for(u32 i = lastSampleIndex; i < sampleIndex; ++i)
+		{
+		  sample += view->samples[channelIdx][i];
+		}
+		sample /= samplesPerPixel;
+
+		Rect2 sampleBar = rectMinDim(sampleBarOffsets[channelIdx] + V2(pixel, 0.f),
+					     V2(1.f, 0.5f*sample*regionDim.y));
+		renderPushQuad(renderCommands, sampleBar, pluginState->null, 0.f,
+			       RENDER_LEVEL(grainViewSignal), V4(0, 1, 0, 1));
+
+		lastSampleIndex = sampleIndex;
 	      }
-	      sample /= samplesPerPixel;
-
-	      Rect2 sampleBar = rectMinDim(sampleBarOffsets[channelIdx] + V2(pixel, 0.f),
-					   V2(1.f, 0.5f*sample*regionDim.y));
-	      renderPushQuad(renderCommands, sampleBar, pluginState->null, 0.f,
-			     RENDER_LEVEL(grainViewSignal), V4(0, 1, 0, 1));
-
-	      lastSampleIndex = sampleIndex;
 	    }
 	  }
-
-          grainStateView->viewReadIndex =
-            (viewEntryReadIndex + entriesQueued) % ARRAY_COUNT(grainStateView->views);
-          u32 oldEntriesQueued = entriesQueued;
-          while(gsAtomicCompareAndSwap(&grainStateView->entriesQueued,
-                                       entriesQueued,
-                                       entriesQueued - oldEntriesQueued) != entriesQueued)
-          {
-            entriesQueued = gsAtomicLoad(&grainStateView->entriesQueued);
-          }
 
           renderPushUILayout(renderCommands, panelLayout);
           uiEndLayout(panelLayout);

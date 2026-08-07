@@ -115,52 +115,6 @@ getWindowVal(GrainManager* grainManager, r32 samplesPlayedFrac, r32 windowParam)
 }
 
 static void
-grainMakeViews(GrainManager *grainManager, AudioRingBufferView newSamples)
-{
-  GrainStateView *grainStateView = grainManager->grainStateView;
-  AudioRingBuffer *grainBuffer = grainManager->internalBuffer;
-  AudioRingBuffer *viewBuffer = grainStateView->viewBuffer;
-
-  u64 samplesToWrite = newSamples.sampleCount;
-
-  // NOTE: queue a new view and fill out its data
-  u32 viewWriteIndex = (grainStateView->viewWriteIndex + 1) % ARRAY_COUNT(grainStateView->views);
-  u32 entriesQueued = gsAtomicLoad(&grainStateView->entriesQueued);
-  GrainBufferViewEntry *newView = grainStateView->views + viewWriteIndex;
-  newView->grainCount = 0;
-
-  // NOTE: fill view buffer with grain buffer samples
-  {
-    AudioRingBufferView destSamples = rbGetWriteView(viewBuffer);
-    u64 availableWriteSamples = destSamples.sampleCount;
-    ASSERT(samplesToWrite <= availableWriteSamples);
-    COPY_ARRAY(destSamples.start[0], newSamples.start[0], samplesToWrite, r32);
-    COPY_ARRAY(destSamples.start[1], newSamples.start[1], samplesToWrite, r32);
-
-    rbEndWrite(viewBuffer, samplesToWrite);
-  }
-
-  newView->bufferReadIndex = grainBuffer->readIndex & (grainBuffer->sampleCount - 1);
-  newView->bufferWriteIndex = grainBuffer->writeIndex & (grainBuffer->sampleCount - 1);
-
-  for(Grain *grain = grainManager->firstPlayingGrain; grain; grain = grain->next)
-  {
-    GrainViewEntry *grainView = newView->grainViews + newView->grainCount++;
-    grainView->startIndex = grain->readIndex & (grainBuffer->sampleCount - 1);
-    grainView->endIndex = (grain->readIndex + grain->samplesToPlay) & (grainBuffer->sampleCount - 1);
-  }
-
-  // NOTE: queue view entry
-  grainStateView->viewWriteIndex = viewWriteIndex;
-  u32 newEntriesQueued = (entriesQueued + 1) % ARRAY_COUNT(grainStateView->views);
-  while(gsAtomicCompareAndSwap(&grainStateView->entriesQueued, entriesQueued, newEntriesQueued) != entriesQueued)
-  {
-    entriesQueued = gsAtomicLoad(&grainStateView->entriesQueued);
-    newEntriesQueued = (entriesQueued + 1) % ARRAY_COUNT(grainStateView->views);
-  }
-}
-
-static void
 synthesize(GrainManager* grainManager, AudioRingBufferView dest)
 {
   AudioRingBuffer *grainBuffer = grainManager->internalBuffer;
@@ -294,12 +248,11 @@ grainManagerRefill(AudioBufferStream *stream)
   r32 *srcR = sampleSource->startSamples[1] + sampleSource->sampleCursor;
   u64 availableReadSamples = sampleSource->sampleCount;
 
-  // NOTE: fill the grain buffer
   u64 availableWriteSamples;
+  // NOTE: fill the grain buffer
   {
     AudioRingBufferView destSamples = rbGetWriteView(grainInputBuffer);
     u64 samplesToWrite = MIN(availableReadSamples, destSamples.sampleCount);
-    destSamples.sampleCount = samplesToWrite;
     COPY_ARRAY(destSamples.start[0], srcL, samplesToWrite, r32);
     COPY_ARRAY(destSamples.start[1], srcR, samplesToWrite, r32);
     availableWriteSamples = samplesToWrite;
@@ -307,7 +260,7 @@ grainManagerRefill(AudioBufferStream *stream)
     rbEndWrite(grainInputBuffer, samplesToWrite);
     sampleSource->sampleCursor += samplesToWrite;
 
-    grainMakeViews(grainManager, destSamples);
+    enqueueGrainStateView(grainManager);
   }
 
   AudioRingBufferView destSamples = rbGetWriteView(grainOutputBuffer);
@@ -348,7 +301,7 @@ initializeGrainManager(PluginState *pluginState)
   result.sampleSource = &pluginState->inputStream.stream;
 
   result.parameters = pluginState->parameters;
-  result.grainStateView = &pluginState->grainStateView;
+  result.grainStateViewBuffer = &pluginState->grainStateViewBuffer;
 
 // #define GRAIN_BUFFER_SAMPLE_COUNT (1ULL << 16)
 //   STATIC_ASSERT(IS_POWER_OF_2(GRAIN_BUFFER_SAMPLE_COUNT), grainBufferSampleCountCheck);
