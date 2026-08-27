@@ -9,6 +9,7 @@ testRunAll(void)
 {
   TemporaryMemory scratch = arenaGetScratch(0, 0);
 
+  String8List log = {};
   usz testerCount = testGetCount();
   Tester *testers = testGetFirst();
   for(usz i = 0; i < testerCount; ++i)
@@ -18,11 +19,19 @@ testRunAll(void)
     if(!testResult.success)
     {
       String8 logString = stringListJoin(scratch.arena, &testResult.log, STR8_LIT("\n"));
-      logFormatString("%.*s test failed:\n %.*s",
-		      tester->name.size, tester->name.str,
-		      logString.size, logString.str);
+      stringListPushFormat(scratch.arena, &log,
+			   "%.*s test failed:\n %.*s\n",
+			   tester->name.size, tester->name.str,
+			   logString.size, logString.str);
+      // logFormatString("%.*s test failed:\n %.*s",
+      // 		      tester->name.size, tester->name.str,
+      // 		      logString.size, logString.str);
     }
   }
+
+  String8 fileString = stringListJoin(scratch.arena, &log, STR8_LIT("\n"));
+  Buffer fileContents = bufferMake(fileString.str, fileString.size);
+  gsWriteEntireFile(DATA_PATH "test/test_log.txt", fileContents);
 
   arenaReleaseScratch(scratch);
 }

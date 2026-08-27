@@ -102,7 +102,7 @@ testReverseFFT(Arena *arena, c64 *input, usz count, FftKernels *kernels, r32 *ta
   b32 success = 1;
   String8List log = {};
   {
-    r32 const tol = 2e-2;
+    r32 const tol = 1e-2;
     for(usz i = 0; i < count; ++i)
     {
       r32 resultVal = output[i];
@@ -132,6 +132,53 @@ testReverseFFT(Arena *arena, c64 *input, usz count, FftKernels *kernels, r32 *ta
   result.success = success;
   result.log = log;
   return(result);
+}
+
+struct FftForwardReverseTestArgs
+{
+  r32 *io;
+  usz count;
+  FftKernels *kernels;
+};
+
+static TestResult
+testForwardReverseFFT(Arena *arena, r32 *io, usz count, FftKernels *kernels)
+{
+  c64 *spectrum = arenaPushArray(arena, count/2, c64);
+  fft_re(spectrum, io, count, kernels);
+
+  r32 *testOut = arenaPushArray(arena, count, r32);
+  ifft_re(testOut, spectrum, count, kernels);
+
+  b32 success = 1;
+  String8List log = {};
+  {
+    r32 const tol = 1e-5;
+    for(usz i = 0; i < count; ++i)
+    {
+      r32 resultVal = testOut[i];
+      r32 targetVal = io[i];
+      r32 diff = gsAbs(resultVal - targetVal);
+      if(diff > tol)
+      {
+	success = 0;
+	stringListPushFormat(arena, &log,
+			     "ifft(fft) discrepancy at sample %lu\n"
+			     "  result = %.5f\n"
+			     "  target = %.5f\n"
+			     "    diff = %.5f\n",
+			     i,
+			     resultVal,
+			     targetVal,
+			     diff);
+      }
+    }
+  }
+
+  TestResult result = {};
+  result.success = success;
+  result.log = log;
+  return result;
 }
 
 // TODO: pass the args
@@ -169,6 +216,22 @@ TEST_FN_DEF(ifft_test, &ifft_test_args)
 
   TestResult result = testReverseFFT(arena, input, count, kernels, target);
   return(result);
+}
+
+FftForwardReverseTestArgs ifft_fft_test_args = {
+  (r32*)fft_test_signal,
+  ARRAY_COUNT(fft_test_signal)/sizeof(r32),
+  &fft_kernels,
+};
+TEST_FN_DEF(ifft_fft_test, &ifft_fft_test_args)
+{
+  auto *ifft_fft_args = (FftForwardReverseTestArgs*)args;
+  r32 *io = ifft_fft_args->io;
+  usz count = ifft_fft_args->count;
+  FftKernels *kernels = ifft_fft_args->kernels;
+
+  TestResult result = testForwardReverseFFT(arena, io, count, kernels);
+  return result;
 }
 
 struct FFT_TestResult

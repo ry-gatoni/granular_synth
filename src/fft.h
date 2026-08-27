@@ -234,8 +234,7 @@ fft_real_convert__radix_2(c64 *io, usz real_count)
   {
     r32 *twiddles_im = twiddle_table__radix_2 + 2*m;
     r32 *twiddles_re = twiddles_im + m/2;
-    if(dir == FftDirection_forward) // NOTE: -sine for forward transform
-    { twiddles_im += m; }
+    twiddles_im += m; // NOTE: -sine for both directions
 
     for(usz k = 1; k < T::count; ++k)
     {
@@ -255,22 +254,38 @@ fft_real_convert__radix_2(c64 *io, usz real_count)
 	r32 in1_re = 0.5f*(l_im + r_im);
 	r32 in1_im = 0.5f*(r_re - l_re);
 
-	out0_re = in0_re + w_re*in1_re - w_im*in1_im;
-	out0_im = in0_im + w_re*in1_im + w_im*in1_re;
-	out1_re = in0_re - w_re*in1_re + w_im*in1_im;
-	out1_im = w_re*in1_im + w_im*in1_re - in0_im;
+	r32 t_re = w_re*in1_re - w_im*in1_im;
+	r32 t_im = w_re*in1_im + w_im*in1_re;
+
+	out0_re = in0_re + t_re;
+	out0_im = in0_im + t_im;
+	out1_re = in0_re - t_re;
+	//out1_im = in0_im - t_im;
+	out1_im = t_im - in0_im;
+	// out0_re = in0_re + w_re*in1_re - w_im*in1_im;
+	// out0_im = in0_im + w_re*in1_im + w_im*in1_re;
+	// out1_re = in0_re - w_re*in1_re + w_im*in1_im;
+	// out1_im = w_re*in1_im + w_im*in1_re - in0_im;
       }
       else // dir == FftDirection_inverse
       {
 	r32 in0_re = 0.5f*(l_re + r_re);
 	r32 in0_im = 0.5f*(l_im - r_im);
-	r32 in1_re = 0.5f*(l_re - r_re);
-	r32 in1_im = 0.5f*(l_im + r_im);
+	r32 u_re = 0.5f*(l_re - r_re);
+	r32 u_im = 0.5f*(l_im + r_im);
+	// r32 in1_re = 0.5f*(l_re - r_re);
+	// r32 in1_im = 0.5f*(l_im + r_im);
+	r32 in1_re = u_re*w_re + u_im*w_im;
+	r32 in1_im = u_im*w_re - u_re*w_im;
 
-	out0_re = in0_re - w_re*in1_im - w_im*in1_re;
-	out0_im = in0_im + w_re*in1_re - w_im*in1_im;
-	out1_re = in0_re + w_re*in1_im + w_im*in1_re;
-	out1_im = w_re*in1_re - w_im*in1_im - in0_im;
+	out0_re = in0_re - in1_im;
+	out0_im = in0_im + in1_re;
+	out1_re = in0_re + in1_im;
+	out1_im = in1_re - in0_im;
+	// out0_re = in0_re - w_re*in1_im - w_im*in1_re;
+	// out0_im = in0_im + w_re*in1_re - w_im*in1_im;
+	// out1_re = in0_re + w_re*in1_im + w_im*in1_re;
+	// out1_im = w_re*in1_re - w_im*in1_im - in0_im;
       }
 
       io[k].re = out0_re;
@@ -285,8 +300,7 @@ fft_real_convert__radix_2(c64 *io, usz real_count)
     T half(0.5f);
     r32 *twiddles_im = twiddle_table__radix_2 + 2*m;
     r32 *twiddles_re = twiddles_im + m/2;
-    if(dir == FftDirection_forward) // NOTE: -sine for forward transform
-    { twiddles_im += m; }
+    twiddles_im += m; // NOTE: -sine for both directions
 
     for(usz k = T::count; k < m/2; k += T::count)
     {
@@ -321,13 +335,23 @@ fft_real_convert__radix_2(c64 *io, usz real_count)
 	T in1_re = half*(l_im + r_im);
 	T in1_im = half*(r_re - l_re);
 
-	// NOTE: radix-2 merge step:
-	// x[k] = x_e[k] + w^k*x_o[k]
-	out0_re = in0_re + w_re*in1_re - w_im*in1_im;
-	out0_im = in0_im + w_re*in1_im + w_im*in1_re;
-	// x[m - k] = x[n - (m + k)] = x[m + k]* = (x_e[k] - w^k*x_o[k])*
-	out1_re = in0_re - w_re*in1_re + w_im*in1_im;
-	out1_im = w_re*in1_im + w_im*in1_re - in0_im;
+	T t_re = w_re*in1_re - w_im*in1_im;
+	T t_im = w_re*in1_im + w_im*in1_re;
+
+	out0_re = in0_re + t_re;
+	out0_im = in0_im + t_im;
+	out1_re = in0_re - t_re;
+	//out1_im = in0_im - t_im;
+	out1_im = t_im - in0_im;
+
+	// // NOTE: radix-2 merge step:
+	// // x[k] = x_e[k] + w^k*x_o[k]
+	// out0_re = in0_re + w_re*in1_re - w_im*in1_im;
+	// out0_im = in0_im + w_re*in1_im + w_im*in1_re;
+	// // x[m - k] = x[n - (m + k)] = x[m + k]* = (x_e[k] - w^k*x_o[k])*
+	// out1_re = in0_re - w_re*in1_re + w_im*in1_im;
+	// //out1_im = w_re*in1_im + w_im*in1_re - in0_im;
+	// out1_im = in0_re - w_re*in1_im - w_im*in1_re;
       }
       else // dir == FftDirection_inverse
       {
@@ -341,13 +365,26 @@ fft_real_convert__radix_2(c64 *io, usz real_count)
 
 	T in0_re = half*(l_re + r_re);
 	T in0_im = half*(l_im - r_im);
-	T in1_re = half*(l_re - r_re);
-	T in1_im = half*(l_im + r_im);
+	T u_re = half*(l_re - r_re);
+	T u_im = half*(l_im + r_im);
+	T in1_re = u_re*w_re + u_im*w_im;
+	T in1_im = u_im*w_re - u_re*w_im;
+	// T in1_re = half*(l_re - r_re);
+	// T in1_im = half*(l_im + r_im);
 
-	out0_re = in0_re - w_re*in1_im - w_im*in1_re;
-	out0_im = in0_im + w_re*in1_re - w_im*in1_im;
-	out1_re = in0_re + w_re*in1_im + w_im*in1_re;
-	out1_im = w_re*in1_re - w_im*in1_im - in0_im;
+	out0_re = in0_re - in1_im;
+	out0_im = in0_im + in1_re;
+	out1_re = in0_re + in1_im;
+	out1_im = in1_re - in0_im;
+
+	// //out0_re = in0_re - w_re*in1_im - w_im*in1_re;
+	// out0_re = in0_re - w_re*in1_im + w_im*in1_re;
+	// //out0_im = in0_im + w_re*in1_re - w_im*in1_im;
+	// out0_im = in0_im + w_re*in1_re + w_im*in1_im;
+	// //out1_re = in0_re + w_re*in1_im + w_im*in1_re;
+	// out1_re = in0_re + w_re*in1_im - w_im*in1_re;
+	// //out1_im = w_re*in1_re - w_im*in1_im - in0_im;
+	// out1_im = in0_im - w_re*in1_re - w_im*in1_im;
       }
       T::reverse(out1_re);
       T::reverse(out1_im);
@@ -398,6 +435,7 @@ fft_re(c64 *out, r32 *in, usz count, FftKernels *kernels)
     kernels->fft_kernel(out, level, count/2);
   }
 
+#if 0
   // DEBUG:
   TemporaryMemory scratch = arenaGetScratch(0, 0);
   String8List debugLogList = {};
@@ -414,6 +452,7 @@ fft_re(c64 *out, r32 *in, usz count, FftKernels *kernels)
   debugLogBuffer.contents = debugLog.str;
   gsWriteEntireFile(DATA_PATH"test/fft_re_conversion_test.txt", debugLogBuffer);
   arenaReleaseScratch(scratch);
+#endif
 
   kernels->fft_real_convert(out, count);
 }
@@ -425,6 +464,7 @@ ifft_re(r32 *out, c64 *in, usz count, FftKernels *kernels)
 {
   kernels->ifft_real_convert(in, count);
 
+#if 0
   // DEBUG:
   TemporaryMemory scratch = arenaGetScratch(0, 0);
   String8List debugLogList = {};
@@ -441,6 +481,7 @@ ifft_re(r32 *out, c64 *in, usz count, FftKernels *kernels)
   debugLogBuffer.contents = debugLog.str;
   gsWriteEntireFile(DATA_PATH"test/ifft_re_conversion_test.txt", debugLogBuffer);
   arenaReleaseScratch(scratch);
+#endif
 
   usz const initial_level = kernels->ifft_initial((c64*)out, in, count/2);
   for(usz level = initial_level; level < count/2; level *= 2)
