@@ -262,6 +262,10 @@ struct PlayingSound
 static AUDIO_BUFFER_STREAM_REFILL_PROC(mixInputSamples);
 static AUDIO_BUFFER_STREAM_REFILL_PROC(grainManagerRefill);
 static AUDIO_BUFFER_STREAM_REFILL_PROC(mixOutputSamples);
+static AUDIO_BUFFER_STREAM_REFILL_PROC(pvRefill);
+
+static AUDIO_BUFFER_STREAM_REFILL_PROC(pvAnalysisRefill);
+static AUDIO_BUFFER_STREAM_REFILL_PROC(pvSynthesisRefill);
 
 // NOTE: streams
 struct OutputMixStream
@@ -283,6 +287,42 @@ struct InputMixStream
 
   PluginAudioBuffer *audioBuffer;
   PluginState *pluginState;
+};
+
+struct PVStream
+{
+  AudioBufferStream stream; // NOTE: must be the first member for casting reasons
+
+  AudioBufferStream *source;
+  AudioRingBuffer *destBuffer;
+
+  r32 *windowSamples;
+  u32 windowSampleCount;
+
+  u32 analysisHopSize;
+  u32 synthesisHopSize;
+};
+
+struct PVAnalysisStream
+{
+  AudioBufferStream stream; // NOTE: must be the first member for casting reasons
+
+  AudioBufferStream *source;
+  AudioRingBuffer *destBuffer;
+
+  u32 windowSampleCount;
+  u32 analysisHopSize;
+};
+
+struct PVSynthesisStream
+{
+  AudioBufferStream stream; // NOTE: must be the first member for casting reasons
+
+  AudioBufferStream *source;
+  AudioRingBuffer *destBuffer;
+
+  u32 windowSampleCount;
+  u32 synthesisHopSize;
 };
 
 // NOTE: plugin state
@@ -314,11 +354,17 @@ struct PluginState
   InputMixStream inputStream;
   AudioBufferStream inputStreamClone;
 
+  PVStream pvStream;
+
+  PVAnalysisStream pvAnalysisStream;
+  PVSynthesisStream pvSynthesisStream;
+
   AudioRingBuffer inputBuffer;
   AudioRingBuffer grainInputBuffer;
   AudioRingBuffer grainOutputBuffer;
 
-  AudioRingBuffer grainViewBuffer;
+  AudioRingBuffer pvWindowBuffer;
+  AudioRingBuffer pvOutputBuffer;
 
   GrainManager grainManager;
   GrainStateViewBuffer grainStateViewBuffer;

@@ -103,8 +103,6 @@ rbGetWriteView(AudioRingBuffer *rb)
 
   r32 *startL = rb->samples[0] + writeIndexWrapped;
   r32 *startR = rb->samples[1] + writeIndexWrapped;
-  ZERO_ARRAY(startL, sampleCount, r32);
-  ZERO_ARRAY(startR, sampleCount, r32);
 
   AudioRingBufferView result = {};
   result.start[0] = startL;

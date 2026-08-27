@@ -155,8 +155,6 @@ printButtonState(ButtonState button, char *name)
                   isDown(button) ? "down" : "up");
 }
 
-static PluginState *globalPluginState = 0;
-
 EXPORT_FUNCTION PluginState*
 gsInitializePluginState(PluginMemory *memoryBlock)
 {
@@ -177,6 +175,8 @@ gsInitializePluginState(PluginMemory *memoryBlock)
       Arena *permanentArena = gsArenaAcquire(MEGABYTES(1));
       pluginState = arenaPushStruct(permanentArena, PluginState);
       pluginState->permanentArena = permanentArena;
+
+      globalPluginState = pluginState;
 
       pluginState->osTimerFreq = memoryBlock->osTimerFreq;
       pluginState->pluginHost = memoryBlock->host;
@@ -255,7 +255,35 @@ gsInitializePluginState(PluginMemory *memoryBlock)
         pluginState->outputStream.stream.refill = mixOutputSamples;
         pluginState->outputStream.inputSource = &pluginState->inputStreamClone;
         pluginState->outputStream.grainSource = &pluginState->grainManager.stream;
-        pluginState->outputStream.pluginState = pluginState;
+	pluginState->outputStream.pluginState = pluginState;
+
+#define PV_WINDOW_SAMPLE_COUNT 256
+	pluginState->pvStream.stream.refill = pvRefill;
+	pluginState->pvStream.source = &pluginState->inputStream.stream;
+	pluginState->pvStream.destBuffer = &pluginState->pvOutputBuffer;
+	pluginState->pvStream.windowSamples = arenaPushArray(pluginState->permanentArena, PV_WINDOW_SAMPLE_COUNT, r32);
+	for(u32 i = 0; i < PV_WINDOW_SAMPLE_COUNT; ++i)
+	{
+	  pluginState->pvStream.windowSamples[i] = 0.5f*(1.f - gsCos(GS_TAU * (r32)i/(r32)PV_WINDOW_SAMPLE_COUNT));
+	}
+	pluginState->pvStream.windowSampleCount = PV_WINDOW_SAMPLE_COUNT;
+	pluginState->pvStream.analysisHopSize = PV_WINDOW_SAMPLE_COUNT / 2;
+	pluginState->pvStream.synthesisHopSize = pluginState->pvStream.analysisHopSize;
+
+	pluginState->pvAnalysisStream.stream.refill = pvAnalysisRefill;
+	pluginState->pvAnalysisStream.source = &pluginState->inputStream.stream;
+	pluginState->pvAnalysisStream.destBuffer = &pluginState->pvWindowBuffer;
+	pluginState->pvAnalysisStream.windowSampleCount = PV_WINDOW_SAMPLE_COUNT;
+	pluginState->pvAnalysisStream.analysisHopSize = PV_WINDOW_SAMPLE_COUNT/2;
+
+	// TODO: parametrize hop sizes (1 stretch factor parameter, maybe
+	// compute analysis/synthesis hop sizes from that?)
+
+	pluginState->pvSynthesisStream.stream.refill = pvSynthesisRefill;
+	pluginState->pvSynthesisStream.source = &pluginState->pvAnalysisStream.stream;
+	pluginState->pvSynthesisStream.destBuffer = &pluginState->pvOutputBuffer;
+	pluginState->pvSynthesisStream.windowSampleCount = PV_WINDOW_SAMPLE_COUNT;
+	pluginState->pvSynthesisStream.synthesisHopSize = PV_WINDOW_SAMPLE_COUNT/2;
       }
 
       // NOTE: initialize internal buffers
@@ -263,7 +291,9 @@ gsInitializePluginState(PluginMemory *memoryBlock)
       rbInit(&pluginState->inputBuffer, KILOBYTES(8),  buffersAreMagic);
       rbInit(&pluginState->grainInputBuffer, KILOBYTES(64), buffersAreMagic);
       rbInit(&pluginState->grainOutputBuffer, KILOBYTES(8), buffersAreMagic);
-      rbInit(&pluginState->grainViewBuffer, KILOBYTES(64), buffersAreMagic);
+      rbInit(&pluginState->pvWindowBuffer, KILOBYTES(64), buffersAreMagic);
+      rbInit(&pluginState->pvOutputBuffer, KILOBYTES(8), buffersAreMagic);
+      rbEndWrite(&pluginState->inputBuffer, PV_WINDOW_SAMPLE_COUNT); // NOTE: some input latency because the phase vocoder can't output samples until it has this many
 
       // NOTE: grain buffer initialization
       pluginState->grainManager = initializeGrainManager(pluginState);
@@ -287,7 +317,131 @@ gsInitializePluginState(PluginMemory *memoryBlock)
 #if FINGERTIPS
       pluginState->loadedSound.sound =
         loadWav(pluginState->permanentArena, STR8_LIT(DATA_PATH"fingertips.wav"));
-      pluginState->loadedSound.samplesPlayed = 0;// + pluginState->start_pos);
+      pluginState->loadedSound.samplesPlayed = 0;
+
+#if 0
+      // DEBUG:
+      {
+	TemporaryMemory scratch = arenaGetScratch(0, 0);
+
+	u32 sampleRate = INTERNAL_SAMPLE_RATE;
+	u32 srcSampleCount = pluginState->loadedSound.sound.sampleCount;
+	r32 *srcSamples = pluginState->loadedSound.sound.samples[0];
+
+	u32 blockSampleCount = 480;
+	u32 blockCount = srcSampleCount / blockSampleCount;
+
+	u32 windowSampleCount = 256;
+	u32 analysisHopSize = windowSampleCount / 2;
+	u32 synthesisHopSize = analysisHopSize;
+
+	AudioRingBuffer inputBuffer;
+	rbInit(&inputBuffer, KILOBYTES(8), buffersAreMagic);
+	rbEndWrite(&inputBuffer, windowSampleCount);
+
+	AudioRingBuffer outputBuffer;
+	rbInit(&outputBuffer, KILOBYTES(8), buffersAreMagic);
+
+	// u32 windowCount = (srcSampleCount - windowSampleCount)/analysisHopSize + 1;
+	// u32 destSampleCount = windowCount * synthesisHopSize;
+	u32 destSampleCount = srcSampleCount;
+	ASSERT(destSampleCount <= srcSampleCount);
+	r32 *destSamples = arenaPushArray(scratch.arena, destSampleCount, r32);
+
+	{
+	  r32 *src = srcSamples;
+	  r32 *dest = destSamples;
+
+	  r32 *windowBuffer = arenaPushArray(scratch.arena, windowSampleCount, r32);
+	  for(u32 i = 0; i < windowSampleCount; ++i)
+	  {
+	    windowBuffer[i] = 0.5f*(1.f - gsCos(GS_TAU * (r32)i/(r32)windowSampleCount));
+	  }
+
+	  r32 *windowTemp = arenaPushArray(scratch.arena, windowSampleCount, r32);
+	  c64 *spectrumTemp = arenaPushArray(scratch.arena, windowSampleCount/2, c64);
+
+#if 1
+	  for(u32 blockIdx = 0; blockIdx < blockCount; ++blockIdx)
+	  {
+	    {
+	      AudioRingBufferView writeView = rbGetWriteView(&inputBuffer);
+	      ASSERT(writeView.sampleCount >= blockSampleCount);
+	      COPY_ARRAY(writeView.start[0], src, blockSampleCount, r32);
+	      //COPY_ARRAY(writeView.start[1], src, blockSampleCount, r32);
+	      rbEndWrite(&inputBuffer, blockSampleCount);
+	    }
+
+	    {
+	      AudioRingBufferView writeView = rbGetWriteView(&outputBuffer);
+	      AudioRingBufferView readView = rbGetReadView(&inputBuffer);
+	      while(readView.sampleCount >= windowSampleCount)
+	      {
+		for(u32 i = 0; i < windowSampleCount; ++i)
+		{
+		  windowTemp[i] = readView.start[0][i] * windowBuffer[i];
+		}
+
+		//ASSERT(dest + windowSampleCount < destSamples + destSampleCount);
+		ASSERT(writeView.sampleCount >= windowSampleCount);
+		fft_re(spectrumTemp, windowTemp, windowSampleCount, &fft_kernels);
+		ifft_re(windowTemp, spectrumTemp, windowSampleCount, &fft_kernels);
+		for(u32 i = 0; i < windowSampleCount; ++i)
+		{
+		  //dest[i] += windowTemp[i];
+		  if(i >= synthesisHopSize) ASSERT(writeView.start[0][i] == 0);
+		  writeView.start[0][i] += windowTemp[i];
+		}
+
+		//dest += synthesisHopSize;
+
+		rbEndWrite(&outputBuffer, synthesisHopSize);
+		writeView = rbGetWriteView(&outputBuffer);
+
+		rbEndRead(&inputBuffer, analysisHopSize);
+		readView = rbGetReadView(&inputBuffer);
+	      }
+	    }
+
+	    AudioRingBufferView readView = rbGetReadView(&outputBuffer);
+	    ASSERT(readView.sampleCount >= blockSampleCount);
+	    COPY_ARRAY(dest, readView.start[0], blockSampleCount, r32);
+	    ZERO_ARRAY(readView.start[0], blockSampleCount, r32);
+	    rbEndRead(&outputBuffer, blockSampleCount);
+
+	    dest += blockSampleCount;
+	    src += blockSampleCount;
+	  }
+
+#else
+	  for(u32 windowIdx = 0; windowIdx < windowCount; ++windowIdx)
+	  {
+	    for(u32 i = 0; i < windowSampleCount; ++i)
+	    {
+	      windowTemp[i] = src[i] * windowBuffer[i];
+	    }
+
+	    fft_re(spectrumTemp, windowTemp, windowSampleCount, &fft_kernels);
+	    ifft_re(windowTemp, spectrumTemp, windowSampleCount, &fft_kernels);
+	    for(u32 i = 0; i < windowSampleCount; ++i)
+	    {
+	      dest[i] += windowTemp[i];
+	    }
+
+	    //src += windowSampleCount;
+	    src += analysisHopSize;
+	    //dest += windowSampleCount;
+	    dest += synthesisHopSize;
+	  }
+#endif
+	}
+
+	r32 *samples[2] = { destSamples, destSamples };
+	logSamples(samples, destSampleCount);
+
+	arenaReleaseScratch(scratch);
+      }
+#endif
 #endif
 
 #if 0
@@ -367,7 +521,6 @@ gsInitializePluginState(PluginMemory *memoryBlock)
 #endif
 
       pluginState->initialized = true;
-      globalPluginState = pluginState;
     }
   return(pluginState);
 }
@@ -1638,33 +1791,160 @@ gsRenderNewFrame(PluginMemory *memory, PluginInput *input, RenderCommands *rende
  *   previous request without modifying the underlying sample source.
  */
 
-struct PVStream
-{
-  BufferStream stream; // NOTE: must be the first member for casting reasons
-  BufferStream *source;
-  Arena *refillArena;
-  u32 windowSampleCount;
-  u32 analysisHopSize;
-};
-
-// TODO: is using `SamplePair` actually better if we end up needing to vectorize each channel?
-#if 0
 static void
-pvProcess(BufferStream *stream)
+pvRefill(AudioBufferStream *stream)
 {
-  PVStream *pvStream = (PVStream*)stream;
+  auto *pvStream = (PVStream*)stream;
 
-  Arena *refillArena = pvStream->refillArena;
+  AudioBufferStream *source = pvStream->source;
+  AudioRingBuffer *destBuffer = pvStream->destBuffer;
+
+  r32 *windowSamples = pvStream->windowSamples;
+  u32 windowSampleCount = pvStream->windowSampleCount;
+  u32 analysisHopSize = pvStream->analysisHopSize;
+  u32 synthesisHopSize = pvStream->synthesisHopSize;
+
+  // NOTE: advance dest buffer read cursor
+  {
+    u32 samplesRead = stream->sampleCursor;
+    ASSERT(samplesRead <= stream->sampleCount);
+    ZERO_ARRAY(stream->startSamples[0], samplesRead, r32);
+    ZERO_ARRAY(stream->startSamples[1], samplesRead, r32);
+    ASSERT(destBuffer->readIndex + samplesRead <= destBuffer->writeIndex);
+    rbEndRead(destBuffer, samplesRead);
+  }
+
+  // NOTE: pull more samples (always needed because we read as much as we can every call)
+  source->refill(source);
+  u32 samplesAvailable = source->sampleCount - source->sampleCursor;
+
+  TemporaryMemory scratch = arenaGetScratch(0, 0);
+
+  r32 *windowTemp = arenaPushArray(scratch.arena, windowSampleCount, r32);
+  c64 *spectrumTemp = arenaPushArray(scratch.arena, windowSampleCount/2, c64);
+
+  u32 samplesRead = 0;
+  u32 samplesWritten = 0;
+  AudioRingBufferView writeView = rbGetWriteView(destBuffer);
+
+  for(u32 channelIdx = 0; channelIdx < 2; ++channelIdx)
+  {
+    r32 *srcStart = source->startSamples[channelIdx] + source->sampleCursor;
+    r32 *destStart = writeView.start[channelIdx];
+
+    r32 *srcEnd = srcStart + samplesAvailable;
+    r32 *destEnd = destStart + writeView.sampleCount;
+
+    r32 *src = srcStart;
+    r32 *dest = destStart;
+
+    while(src + windowSampleCount <= srcEnd)
+    {
+      for(u32 i = 0; i < windowSampleCount; ++i)
+      {
+	windowTemp[i] = src[i] * windowSamples[i];
+      }
+
+      ASSERT(dest + windowSampleCount <= destEnd);
+      fft_re(spectrumTemp, windowTemp, windowSampleCount, &fft_kernels);
+      ifft_re(windowTemp, spectrumTemp, windowSampleCount, &fft_kernels);
+      for(u32 i = 0; i < windowSampleCount; ++i)
+      {
+	if(i >= synthesisHopSize) ASSERT(dest[i] == 0);
+	dest[i] += windowTemp[i];
+      }
+
+      src += analysisHopSize;
+      dest += synthesisHopSize;
+    }
+
+    samplesRead = src - srcStart;
+    samplesWritten = dest - destStart;
+  }
+
+  rbEndWrite(destBuffer, samplesWritten);
+  source->sampleCursor += samplesRead;
+
+  arenaReleaseScratch(scratch);
+
+  AudioRingBufferView readView = rbGetReadView(destBuffer);
+  stream->startSamples[0] = readView.start[0];
+  stream->startSamples[1] = readView.start[1];
+  stream->sampleCursor = 0;
+  stream->sampleCount = readView.sampleCount;
+
+}
+
+static void
+pvAnalysisRefill(AudioBufferStream *stream)
+{
+  PVAnalysisStream *pvStream = (PVAnalysisStream*)stream;
+
+  AudioBufferStream *source = pvStream->source;
+  AudioRingBuffer *destBuffer = pvStream->destBuffer;
+
   u32 windowSampleCount = pvStream->windowSampleCount;
   u32 analysisHopSize = pvStream->analysisHopSize;
 
-  BufferStream *inStream = pvStream->source;
+  // NOTE: advance dest buffer read cursor
+  u32 samplesRead = stream->sampleCursor;
+  rbEndRead(destBuffer, samplesRead);
+
+  // NOTE: pull more samples if needed
   {
-    u64 availableSamples = INT_FROM_PTR((SamplePair*)inStream->end - (SamplePair*)inStream->at);
-    if(availableSamples < windowSampleCount) inStream->refill(inStream); // TODO: how to handle unread samples?
-    ASSERT(inStream->at == inStream->start);
+    u32 availableSamples = source->sampleCount - source->sampleCursor;
+    if(availableSamples < windowSampleCount) source->refill(source); // TODO: how to handle unread samples?
   }
 
+#if 1
+  // NOTE: produce stft'ed windows
+  // TODO: this math can probably be simplified (no integer divide or branch)
+  u32 availableSamples = source->sampleCount - source->sampleCursor;
+  ASSERT(availableSamples >= windowSampleCount); // prevents underflow in next calculation
+  u32 availableWindowCount = (availableSamples - windowSampleCount)/analysisHopSize + 1;
+  u32 readSampleFootprint = availableWindowCount ? windowSampleCount + (availableWindowCount-1)*analysisHopSize : 0;
+  ASSERT(readSampleFootprint <= availableSamples);
+  u32 samplesToRead = availableWindowCount*analysisHopSize;
+  u32 samplesToWrite = availableWindowCount*windowSampleCount;
+  AudioRingBufferView destView = rbGetWriteView(destBuffer);
+  ASSERT(destView.sampleCount >= samplesToWrite);
+
+  for(u32 channelIdx = 0; channelIdx < 2; ++channelIdx)
+  {
+    r32 *sourceSamples = source->startSamples[channelIdx] + source->sampleCursor;
+    for(u32 windowIdx = 0; windowIdx < availableWindowCount; ++windowIdx)
+    {
+      u32 readSampleIdx = windowIdx * analysisHopSize;
+      r32 *inSamples = sourceSamples + readSampleIdx;
+
+      TemporaryMemory scratch = arenaGetScratch(0, 0);
+
+      r32 *windowedSamples = arenaPushArray(scratch.arena, windowSampleCount, r32);
+      for(u32 i = 0; i < windowSampleCount; ++i)
+      {
+	// TODO: make this a lookup (and vectorize)
+	r32 windowVal = 0.5f * (1.f - gsCos(GS_TAU * (r32)i / (r32)windowSampleCount));
+	windowedSamples[i] = windowVal * inSamples[i];
+      }
+
+      u32 writeSampleIdx = windowIdx * windowSampleCount;
+      c64 *fftDest = (c64*)(destView.start[channelIdx] + writeSampleIdx);
+      fft_re(fftDest, windowedSamples, windowSampleCount, &fft_kernels);
+
+      arenaReleaseScratch(scratch);
+    }
+  }
+
+  source->sampleCursor += samplesToRead;
+  rbEndWrite(destBuffer, samplesToWrite);
+
+  AudioRingBufferView readView = rbGetReadView(destBuffer);
+  stream->startSamples[0] = readView.start[0];
+  stream->startSamples[1] = readView.start[1];
+  stream->sampleCursor = 0;
+  stream->sampleCount = readView.sampleCount;
+
+#else
   SamplePair *inputSamples = (SamplePair*)inStream->at;
   inStream->at += analysisHopSize*sizeof(*inputSamples);
 
@@ -1687,33 +1967,83 @@ pvProcess(BufferStream *stream)
   stream->at = (u8*)outputSamples;
   stream->start = stream->at;
   stream->end = (u8*)(inputSamples + pvStream->windowSampleCount);
-}
 #endif
-
-struct PVOutputStream
-{
-  AudioBufferStream stream; // NOTE: must be the first member for casting reasons
-  AudioBufferStream *source;
-  AudioRingBuffer *destBuffer;
-  u32 synthesisHopSize;
-};
+}
 
 static void
-pvOutput(AudioBufferStream *stream)
+pvSynthesisRefill(AudioBufferStream *stream)
 {
-  ASSERT(stream->sampleCursor == stream->sampleCount)
-  PVOutputStream *pvStream = (PVOutputStream*)stream;
-
-  AudioRingBuffer *rb = pvStream->destBuffer;
-  u32 synthesisHopSize = pvStream->synthesisHopSize;
+  PVSynthesisStream *pvStream = (PVSynthesisStream*)stream;
 
   AudioBufferStream *pvSource = pvStream->source;
-  if(pvSource->sampleCursor == pvSource->sampleCount)
+  AudioRingBuffer *rb = pvStream->destBuffer;
+
+  u32 windowSampleCount = pvStream->windowSampleCount;
+  u32 synthesisHopSize = pvStream->synthesisHopSize;
+
+  // NOTE: advance dest buffer read cursor
+  u32 samplesRead = stream->sampleCursor;
+  // NOTE: zero out read samples
+  ZERO_ARRAY(stream->startSamples[0], samplesRead, r32);
+  ZERO_ARRAY(stream->startSamples[1], samplesRead, r32);
+  rbEndRead(rb, samplesRead);
+
+  // NOTE: pull more samples if needed
   {
-    pvSource->refill(pvSource);
+    u32 availableSamples = pvSource->sampleCount - pvSource->sampleCursor;
+    if(availableSamples <= windowSampleCount) pvSource->refill(pvSource);
     ASSERT(pvSource->sampleCursor == 0);
   }
 
+  // NOTE: synthesize windows
+  // TODO: this math can probably be simplified (no integer divide or branch)
+  u32 availableSamples = pvSource->sampleCount - pvSource->sampleCursor;
+  u32 availableWindowCount = availableSamples/windowSampleCount;
+  u32 samplesToRead = availableWindowCount*windowSampleCount;
+  ASSERT(samplesToRead + pvSource->sampleCursor <= pvSource->sampleCount);
+  ASSERT(samplesToRead == availableSamples);
+  u32 samplesToWrite = availableWindowCount*synthesisHopSize;
+  u32 writeSampleFootprint = availableWindowCount ? windowSampleCount + (availableWindowCount-1)*synthesisHopSize : 0;
+  AudioRingBufferView destView = rbGetWriteView(rb);
+  ASSERT(destView.sampleCount >= writeSampleFootprint);
+
+  for(u32 channelIdx = 0; channelIdx < 2; ++channelIdx)
+  {
+    for(u32 windowIdx = 0; windowIdx < availableWindowCount; ++windowIdx)
+    {
+      TemporaryMemory scratch = arenaGetScratch(0, 0);
+
+      u32 readSampleIdx = windowIdx*windowSampleCount;
+      c64 *window = (c64*)(pvSource->startSamples[channelIdx] + readSampleIdx);
+      // TODO: modify phases according to time scaling
+
+      r32 *ifftDest = arenaPushArray(scratch.arena, windowSampleCount, r32);
+      ifft_re(ifftDest, window, windowSampleCount, &fft_kernels);
+
+      u32 writeSampleIdx = windowIdx*synthesisHopSize;
+      r32 *dest = destView.start[channelIdx] + writeSampleIdx;
+
+      // NOTE: overlap-add samples
+      for(u32 sampleIdx = 0; sampleIdx < windowSampleCount; ++sampleIdx)
+      {
+	// TODO: vectorize
+	dest[sampleIdx] += ifftDest[sampleIdx];
+      }
+
+      arenaReleaseScratch(scratch);
+    }
+  }
+
+  pvSource->sampleCursor += samplesToRead;
+  rbEndWrite(rb, samplesToWrite);
+
+  AudioRingBufferView readView = rbGetReadView(rb);
+  stream->startSamples[0] = readView.start[0];
+  stream->startSamples[1] = readView.start[1];
+  stream->sampleCursor = 0;
+  stream->sampleCount = readView.sampleCount;
+
+#if 0
   // NOTE: add new frame to internal buffer and update buffer write index
   {
     r32 *srcL = pvSource->startSamples[0] + pvSource->sampleCursor;
@@ -1746,12 +2076,13 @@ pvOutput(AudioBufferStream *stream)
     stream->end = (u8*)(outputSamples + availableSamples);
   }
 #endif
+#endif
 }
 
 static void
 mixOutputSamples(AudioBufferStream *stream)
 {
-  ASSERT(stream->sampleCursor == stream->sampleCount);
+  ASSERT(stream->sampleCursor == stream->sampleCount); // assume this function writes all required samples every call
 
   OutputMixStream *outMix = (OutputMixStream*)stream;
   AudioBufferStream *grainSource = outMix->grainSource;
@@ -1766,34 +2097,20 @@ mixOutputSamples(AudioBufferStream *stream)
   PluginFloatParameter *mixParam = params + PluginParameter_mix;
   PluginFloatParameter *spreadParam = params + PluginParameter_spread;
 
-  if(grainSource->sampleCursor == grainSource->sampleCount)
+  if(grainSource->sampleCursor + audioBuffer->framesToWrite > grainSource->sampleCount)
   {
     grainSource->refill(grainSource);
     ASSERT(inputSource->sampleCursor == 0);
     ASSERT(grainSource->sampleCursor == 0);
   }
+  u32 samplesAvailable = MIN(inputSource->sampleCount, grainSource->sampleCount);
+  ASSERT(samplesAvailable >= audioBuffer->framesToWrite); // this must be true if we write all required samples every call
 
-  r32 formatVolumeFactor = 1.f;
-  switch(audioBuffer->outputFormat)
-  {
-    case AudioFormat_s16:
-    {
-      formatVolumeFactor = 32000.f;
-    } break;
-    case AudioFormat_r32: break;
-    default: { ASSERT(!"invalid audio format"); } break;
-  }
+  r32 formatVolumeFactor = formatVolumeFromFloat[audioBuffer->outputFormat];
 
   void *genericOutputFrames[2] = {};
   genericOutputFrames[0] = (void*)audioBuffer->outputBuffer[0];
   genericOutputFrames[1] = (void*)audioBuffer->outputBuffer[1];
-  logFormatString("genericOutputFrames = %p, %p",
-                  genericOutputFrames[0], genericOutputFrames[1]);
-  // NOTE: DEBUG
-  usz genericOutputFramesIntL = INT_FROM_PTR(genericOutputFrames[0]);
-  usz genericOutputFramesIntR = INT_FROM_PTR(genericOutputFrames[1]);
-  UNUSED(genericOutputFramesIntL);
-  UNUSED(genericOutputFramesIntR);
 
   TemporaryMemory scratch = arenaGetScratch(0, 0);
 
@@ -1814,7 +2131,8 @@ mixOutputSamples(AudioBufferStream *stream)
     spread[frameIdx] = pluginUpdateFloatParameter(spreadParam);
   }
 
-  logFormatString("samples to write: %lu", audioBuffer->framesToWrite);
+  logFormatString("  samples to write: %lu", audioBuffer->framesToWrite);
+
   for(u32 channelIndex = 0; channelIndex < audioBuffer->outputChannels; ++channelIndex)
   {
     for(u32 frameIndex = 0; frameIndex < audioBuffer->framesToWrite; ++frameIndex)
@@ -1822,23 +2140,16 @@ mixOutputSamples(AudioBufferStream *stream)
       r32 grainSampleL = grainSource->startSamples[0][frameIndex];
       r32 grainSampleR = grainSource->startSamples[1][frameIndex];
       r32 inputSample = inputSource->startSamples[channelIndex][frameIndex];
-
-#if 0
-      if(grainMixBuffersIntL != INT_FROM_PTR(grainMixBuffers[0]) ||
-         grainMixBuffersIntR != INT_FROM_PTR(grainMixBuffers[1]))
-      {
-        logFormatString("grain mix buffers (%p, %p) got fucked up "
-                        "at sample %u, channel %u",
-                        grainMixBuffers[0], grainMixBuffers[1],
-                        frameIndex, channelIndex);
-      }
-#endif
+      //r32 inputSample = inputSamples.start[channelIndex][frameIndex];
 
       r32 mixedVal = 0.f;
 
       // TODO: maybe do a swizzle on the grain samples upfront so we only do
       // this math once while also accessing all samples contiguously
       r32 grainVal = 0.f;
+#if 0
+      grainVal = grainSource->startSamples[channelIndex][frameIndex];
+#else
       if (channelIndex < 2) {
         // NOTE: Make sure we only process left and right channels
         r32 tmp = 1.0f / MAX(1.0f + spread[frameIndex], 2.0f);
@@ -1850,17 +2161,17 @@ mixOutputSamples(AudioBufferStream *stream)
 
         // Update grain value based on channel
         if (channelIndex == 0) {
-          grainVal = mid - sides; // Left channel
+          grainVal = mid + sides; // Left channel
           grainVal = grainVal * (1 - panner[frameIndex]);
         }
         else {
-          grainVal = mid + sides; // Right channel
+          grainVal = mid - sides; // Right channel
           grainVal = grainVal * (1 + panner[frameIndex]);
         }
       }
+#endif
 
       mixedVal += lerp(inputSample, grainVal, mix[frameIndex]);
-      //logFormatString("mixedVal: %.2f", mixedVal);
 
       switch(audioBuffer->outputFormat)
       {
@@ -1897,14 +2208,18 @@ mixInputSamples(AudioBufferStream *stream)
   PluginAudioBuffer *audioBuffer = mix->audioBuffer;
   PluginState *pluginState = mix->pluginState;
 
-  ASSERT(stream->sampleCursor == stream->sampleCount);
-  rbEndRead(destBuffer, stream->sampleCount);
+  // NOTE: advance read cursor
+  ASSERT(stream->sampleCursor >= mix->clone->sampleCursor);
+  u32 readerSamplesAhead = stream->sampleCursor - mix->clone->sampleCursor;
+  u32 minSamplesRead = mix->clone->sampleCursor;
+  ZERO_ARRAY(stream->startSamples[0], minSamplesRead, r32);
+  ZERO_ARRAY(stream->startSamples[1], minSamplesRead, r32);
+  rbEndRead(destBuffer, minSamplesRead);
 
   u32 framesToRead = audioBuffer->framesToWrite;
-  logFormatString("samples to read: %lu", framesToRead);
 
   AudioRingBufferView destSamples = rbGetWriteView(destBuffer);
-  ASSERT(destSamples.sampleCount >= framesToRead);
+  ASSERT(destSamples.sampleCount >= framesToRead); // NOTE: assuming we must read all available samples this call
 
   const void *genericInputFrames[2] = {};
   genericInputFrames[0] = audioBuffer->inputBuffer[0];
@@ -2003,11 +2318,13 @@ mixInputSamples(AudioBufferStream *stream)
   AudioRingBufferView readSamples = rbGetReadView(destBuffer);
   stream->startSamples[0] = readSamples.start[0];
   stream->startSamples[1] = readSamples.start[1];
-  stream->sampleCursor = 0;
+  stream->sampleCursor = readerSamplesAhead;
   stream->sampleCount = readSamples.sampleCount;
 
-  // NOTE: copy to clone
-  COPY_ARRAY(mix->clone, stream, 1, BufferStream);
+  mix->clone->startSamples[0] = readSamples.start[0];
+  mix->clone->startSamples[1] = readSamples.start[1];
+  mix->clone->sampleCursor = 0;
+  mix->clone->sampleCount = readSamples.sampleCount;
 }
 
 EXPORT_FUNCTION void
@@ -2022,7 +2339,7 @@ gsAudioProcess(PluginMemory *memory, PluginAudioBuffer *audioBuffer)
     {
       TemporaryMemory scratch = arenaGetScratch(0, 0);
 
-#if 1 // DEBUG
+#if 0 // DEBUG
       usz const test_count = 1024;
       usz const test_freq_bin = 4;
       r32 *const test_signal = arenaPushArray(scratch.arena, test_count, r32);

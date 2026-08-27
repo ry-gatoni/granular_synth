@@ -233,8 +233,13 @@ grainManagerRefill(AudioBufferStream *stream)
   AudioRingBuffer *grainInputBuffer = grainManager->internalBuffer;
   AudioRingBuffer *grainOutputBuffer = grainManager->outputBuffer;
 
-  ASSERT(stream->sampleCursor == stream->sampleCount);
-  rbEndRead(grainOutputBuffer, stream->sampleCount);
+  // NOTE: advance read cursor
+  {
+    u32 samplesRead = stream->sampleCursor;
+    ZERO_ARRAY(stream->startSamples[0], samplesRead, r32);
+    ZERO_ARRAY(stream->startSamples[1], samplesRead, r32);
+    rbEndRead(grainOutputBuffer, samplesRead);
+  }
 
   // NOTE: refill our input buffers if needed
   AudioBufferStream *sampleSource  = grainManager->sampleSource;
@@ -275,7 +280,6 @@ grainManagerRefill(AudioBufferStream *stream)
   stream->sampleCount = readSamples.sampleCount;
 }
 
-
 static GrainManager
 initializeGrainManager(PluginState *pluginState)
 {
@@ -298,13 +302,11 @@ initializeGrainManager(PluginState *pluginState)
   result.grainFreeList = 0;
 
   result.stream.refill = grainManagerRefill;
-  result.sampleSource = &pluginState->inputStream.stream;
+  //result.sampleSource = &pluginState->inputStream.stream;
+  result.sampleSource = &pluginState->pvStream.stream;
 
   result.parameters = pluginState->parameters;
   result.grainStateViewBuffer = &pluginState->grainStateViewBuffer;
-
-// #define GRAIN_BUFFER_SAMPLE_COUNT (1ULL << 16)
-//   STATIC_ASSERT(IS_POWER_OF_2(GRAIN_BUFFER_SAMPLE_COUNT), grainBufferSampleCountCheck);
 
   result.internalBuffer = &pluginState->grainInputBuffer;
   result.outputBuffer = &pluginState->grainOutputBuffer;
