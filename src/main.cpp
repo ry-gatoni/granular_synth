@@ -350,6 +350,51 @@ loadPNG(String8 path, b32 flip = 1)
   return(result);
 }
 
+static void
+writeWav(u32 sampleRate, u32 channelCount, u32 frameCount, r32 *samples, String8 filename)
+{
+  TemporaryMemory scratch = arenaGetScratch(0, 0);
+
+  u32 waveHeaderSize = sizeof(RiffHeader) + sizeof(WaveHeader) + sizeof(WaveFormatChunk) + sizeof(WaveDataChunk);
+  u32 waveDataSize = frameCount*channelCount*sizeof(*samples);
+  Buffer waveBuffer = {};
+  waveBuffer.size = waveHeaderSize + waveDataSize;
+  waveBuffer.contents = arenaPushSize(scratch.arena, waveBuffer.size);
+
+  Buffer waveWriter = waveBuffer;
+  RiffHeader *riffHeader = bufferReadStruct(&waveWriter, RiffHeader);
+  riffHeader->chunkID.id = RIFF("RIFF");
+  riffHeader->chunkSize = waveWriter.size - sizeof(*riffHeader);
+
+  WaveHeader *waveHeader = bufferReadStruct(&waveWriter, WaveHeader);
+  waveHeader->waveID.id = RIFF("WAVE");
+
+  u32 sampleSize = sizeof(*samples);
+  u32 frameSize = channelCount*sampleSize;
+
+  WaveFormatChunk *waveFmt = bufferReadStruct(&waveWriter, WaveFormatChunk);
+  waveFmt->header.chunkID.id = RIFF("fmt ");
+  waveFmt->header.chunkSize = sizeof(*waveFmt) - sizeof(waveFmt->header);
+  waveFmt->formatTag = 0x0003; // NOTE: only supporting floats for know
+  waveFmt->channelCount = channelCount;
+  waveFmt->sampleRate = sampleRate;
+  waveFmt->avgBytesPerSec = frameSize * sampleRate;
+  waveFmt->dataBlockSize = frameSize;
+  waveFmt->bitsPerSample = 8*sampleSize;
+
+  WaveDataChunk *waveData = bufferReadStruct(&waveWriter, WaveDataChunk);
+  waveData->chunkID.id = RIFF("data");
+  waveData->chunkSize = waveDataSize;
+
+  ASSERT(waveWriter.size == waveDataSize);
+  // NOTE: assume passed array of samples are already interleaved
+  COPY_ARRAY(waveWriter.contents, samples, channelCount*frameCount, r32);
+
+  platformWriteEntireFile((char*)filename.str, waveBuffer);
+
+  arenaReleaseScratch(scratch);
+}
+
 void
 gsCopyMemory(void *dest, void *src, usz size)
 {
@@ -562,6 +607,14 @@ main(int argc, char **argv)
       PluginLogger logger = {};
       logger.logArena = loggerArena;
       logger.maxCapacity = loggerArena->capacity/2;
+
+      usz sampleLogCapacityBytes = MEGABYTES(2);
+      logger.samples[0] = (r32*)platformAllocateRingBufferMemory(&sampleLogCapacityBytes);
+      usz const debugCheck = sampleLogCapacityBytes;
+      logger.samples[1] = (r32*)platformAllocateRingBufferMemory(&sampleLogCapacityBytes);
+      ASSERT(sampleLogCapacityBytes == debugCheck);
+      logger.sampleCapacity = sampleLogCapacityBytes/sizeof(r32);
+      logger.sampleWriteIndex = 0;
 
       pluginMemory.logger = &logger;
 #endif
@@ -880,6 +933,15 @@ main(int argc, char **argv)
 
               ma_device_stop(&maDevice);
               ma_device_uninit(&maDevice);
+
+#if BUILD_LOGGING
+	      {
+		usz sampleOffset = (MAX(logger.sampleWriteIndex, logger.sampleCapacity) - logger.sampleCapacity) & (logger.sampleCapacity - 1);
+		usz sampleCount = MIN(logger.sampleWriteIndex, logger.sampleCapacity);
+		r32 *samples = logger.samples[0] + sampleOffset;
+		writeWav(48000, 1, sampleCount, samples, STR8_LIT(DATA_PATH "log/sample_log.wav"));
+	      }
+#endif
             }
           }
 

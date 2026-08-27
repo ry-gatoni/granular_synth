@@ -99,54 +99,6 @@ logFormatString(char *format, ...)
 #include "ring_buffer.h"
 #include "internal_granulator.h"
 
-#define RIFF(str) FOURCC(str)
-
-union RiffID
-{
-  u32 id;
-  u8 str[4];
-};
-
-#pragma pack(push, 1)
-struct RiffHeader
-{
-  RiffID chunkID;
-  u32 chunkSize;
-};
-
-struct WaveHeader
-{
-  RiffID waveID;
-};
-
-struct WaveFormatChunk
-{
-  RiffHeader header;
-  u16 formatTag;
-  u16 channelCount;
-  u32 sampleRate;
-  u32 avgBytesPerSec;
-  u16 dataBlockSize;
-  u16 bitsPerSample;
-};
-
-struct WaveFormatExtension
-{
-  u16 cbSize;
-  u16 validBitsPerSample;
-  u32 channelMask;
-  u8 subFmt[16];
-};
-
-struct WaveFormatExtended
-{
-  WaveFormatChunk fmt;
-  WaveFormatExtension ex;
-};
-#pragma pack(pop)
-
-typedef RiffHeader WaveDataChunk;
-
 static inline LoadedSound
 loadWav(Arena *arena, String8 path)
 {
@@ -407,6 +359,26 @@ struct PluginState
   volatile u32 initializationLock;
   bool initialized;
 };
+
+static PluginState *globalPluginState = 0;
+
+inline void
+logSamples(r32 *samples[2], usz sampleCount)
+{
+#if BUILD_LOGGING
+  for(u32 channelIdx = 0; channelIdx < 2; ++channelIdx)
+  {
+    r32 *src = samples[channelIdx];
+    r32 *dest = globalLogger->samples[channelIdx] + (globalLogger->sampleWriteIndex & (globalLogger->sampleCapacity -1));
+    COPY_ARRAY(dest, src, sampleCount, r32);
+    if(!hostSupportsRingBufferMagic[globalPluginState->pluginHost])
+    {
+      ASSERT(0); // TODO:
+    }
+  }
+  globalLogger->sampleWriteIndex += sampleCount;
+#endif
+}
 
 // MIdi Continuous Controller Table 0-127
 // NOTE: our parameters are on channels 20 - 29 by default

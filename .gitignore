@@ -20,12 +20,15 @@ data/fingertips_96000_FLOAT.wav
 data/fingertips_96000_PCM_24.wav
 data/fingertips_96000_PCM_32.wav
 data/fingertips_96000_PCM_U8.wav
+data/fingertips_transformed.wav
 data/fingertips_old.grains
 data/test_input.data
 data/test_output.data
 data/test_atlas.bmp
-data/test/log.txt
-data/test/profile_log.txt
+data/test/
+!data/test/fft_test_signal.float
+!data/test/ifft_test_signal.float
+data/log/
 
 src/*.txt
 onnx_build_debug.txt

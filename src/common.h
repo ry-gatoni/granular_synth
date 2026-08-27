@@ -17,17 +17,24 @@
 #include "math.h"
 #include "render.h"
 #include "parameters_common.h"
+#include "files.wav.h"
 
 #include "meta.h"
 
 #if BUILD_LOGGING
 struct PluginLogger
 {
+  // string logging fields (both audio and render thread access)
   Arena *logArena;
   String8List log;
   usz maxCapacity;
 
-  volatile u32 mutex;
+  CACHE_ALIGN_FIELD volatile u32 mutex;
+
+  // audio logging fields (only audio thread accesses)
+  r32 *samples[2];
+  usz sampleCapacity;
+  usz sampleWriteIndex;
 };
 
 extern PluginLogger *globalLogger;
@@ -42,9 +49,9 @@ enum PluginHost
 };
 
 static b32 hostSupportsRingBufferMagic[PluginHost_Count] = {
-  1,
-  1,
-  0,
+  /* [PluginHost_executable] = */ 1,
+  /* [PluginHost_daw]        = */ 1,
+  /* [PluginHost_web]        = */ 0,
 };
 
 struct PluginMemory
@@ -197,6 +204,18 @@ enum AudioFormat
 
   AudioFormat_s16,
   AudioFormat_r32,
+};
+
+static r32 formatVolumeFromFloat[] = {
+  [AudioFormat_none] = 0.f,
+  [AudioFormat_s16]  = 32767.f,
+  [AudioFormat_r32]  = 1.f,
+};
+
+static r32 floatVolumeFromFormat[] = {
+  [AudioFormat_none] = 0.f,
+  [AudioFormat_s16]  = 1.f/32767.f,
+  [AudioFormat_r32]  = 1.f,
 };
 
 struct MidiHeader

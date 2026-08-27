@@ -202,7 +202,7 @@ STATUS=$(( PLUGIN_STATUS || STATUS ))
 if [[ $target_exe == 1 ]]; then
     if [[ $PLUGIN_STATUS == 0 ]]; then
         echo "compiling exe..."
-        clang $CFLAGS -march=native -D"PLUGIN_PATH=\"$PLUGIN_NAME\"" ../src/main.cpp -o granade -L. $GL_FLAGS -lglfw -lminiaudio -ldl -lpthread -lm
+        clang $CFLAGS -march=native -D"PLUGIN_PATH=\"$PLUGIN_NAME\"" -D"DATA_PATH=\"../data/\"" ../src/main.cpp -o granade -L. $GL_FLAGS -lglfw -lminiaudio -ldl -lpthread -lm
         #$(pkg-config --libs --cflags libonnxruntime)
         #-L$SRC_DIR/libs -lonnxruntime
     else
